@@ -1,0 +1,2206 @@
+// This is your prisma/schema.prisma file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== MASTER DATA TABLES (Source from Medprax) ====================
+
+// ICD-10 Diagnosis Codes (PHISC Section 2.3.16, Page 46)
+model Icd10Code {
+  id                 String    @id @default(cuid())
+  code               String    @unique // e.g., "J02.0"
+  description        String    @db.Text
+  longDescription    String?   @map("long_description") @db.Text
+  chapter            String? // Chapter number
+  chapterDescription String?   @map("chapter_description") @db.Text
+  blockCode          String?   @map("block_code")
+  blockDescription   String?   @map("block_description") @db.Text
+  isPmb              Boolean   @default(false) @map("is_pmb") // Prescribed Minimum Benefit
+  isCdl              Boolean   @default(false) @map("is_cdl") // Chronic Disease List
+  isActive           Boolean   @default(true) @map("is_active")
+  effectiveFrom      DateTime  @map("effective_from")
+  effectiveTo        DateTime? @map("effective_to")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  diagnosisRecords   DiagnosisRecord[]
+  procedureRecords   ProcedureRecord[]
+  claimItemDiagnoses ClaimItemDiagnosis[] // ← Changed from claimItems to match actual model name
+  billItemDiagnoses  BillItemDiagnosis[] // ← Changed from billItems to match actual model name
+  prescriptionItems  PrescriptionItem[]
+  billItems          BillItem[] // ← KEEP ONLY ONE - this is correct
+
+  @@index([code])
+  @@index([isPmb])
+  @@index([isCdl])
+  @@map("icd10_codes")
+}
+
+// Tariff/Procedure Codes (NHRPL, SAMA, COID) - PHISC Table 5, Page 82
+model TariffCode {
+  id               String    @id @default(cuid())
+  code             String    @unique // e.g., "0181", "0190", "0201"
+  description      String    @db.Text
+  shortDescription String?   @map("short_description")
+  tariffGuide      String    @map("tariff_guide") // NHRPL, SAMA, COID, CPT, SAOA
+  disciplineCode   String?   @map("discipline_code") // 014=GP, 016=Specialist, etc.
+  disciplineName   String?   @map("discipline_name")
+  defaultPrice     Float?    @map("default_price")
+  unitType         String?   @map("unit_type") // 01=Day, 02=Hour, 03=Minute, 06=Unit (PHISC Table 5 concept)
+  baseTimeMinutes  Int?      @map("base_time_minutes") // For time-based codes (e.g., 0190 = 20 min)
+  excessTimeRate   Float?    @map("excess_time_rate") // Rate per unit for ex_tm
+  isActive         Boolean   @default(true) @map("is_active")
+  effectiveFrom    DateTime  @map("effective_from")
+  effectiveTo      DateTime? @map("effective_to")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  procedureRecords ProcedureRecord[]
+  tariffModifiers  TariffModifier[]
+  claimItems       ClaimItem[]
+
+  @@index([code])
+  @@index([tariffGuide])
+  @@index([disciplineCode])
+  @@map("tariff_codes")
+}
+
+// Modifier Codes (PHISC Section 2.4, Page 65-76)
+model ModifierCode {
+  id               String    @id @default(cuid())
+  code             String    @unique // e.g., "0005", "0023", "0036"
+  description      String    @db.Text
+  shortDescription String?   @map("short_description")
+  modifierType     String    @map("modifier_type") // Info, Reduce, Add, Compound (PHISC 2.4.4)
+  applyTo          String?   @map("apply_to") // Which tariff types this applies to
+  valueType        String?   @map("value_type") // Percentage, Fixed, Unit
+  defaultValue     Float?    @map("default_value")
+  isTimeBased      Boolean   @default(false) @map("is_time_based") // e.g., 0023 for anaesthetic time
+  isActive         Boolean   @default(true) @map("is_active")
+  effectiveFrom    DateTime  @map("effective_from")
+  effectiveTo      DateTime? @map("effective_to")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tariffModifiers    TariffModifier[]
+  procedureModifiers ProcedureModifier[]
+  billModifiers      BillModifier[]
+  claimItemModifiers ClaimItemModifier[]
+
+  @@index([code])
+  @@index([modifierType])
+  @@map("modifier_codes")
+}
+
+// Junction table for Tariff-Modifier (valid combinations)
+model TariffModifier {
+  id           String  @id @default(cuid())
+  tariffCodeId String  @map("tariff_code_id")
+  modifierId   String  @map("modifier_id")
+  isMandatory  Boolean @default(false) @map("is_mandatory")
+  sequence     Int? // Order of application (reduction first, then addition)
+
+  tariffCode TariffCode   @relation(fields: [tariffCodeId], references: [id], onDelete: Cascade)
+  modifier   ModifierCode @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+
+  @@unique([tariffCodeId, modifierId])
+  @@map("tariff_modifiers")
+}
+
+// NAPPI Medicine Codes (PHISC Table 15, Page 84)
+model NappiCode {
+  id                   String    @id @default(cuid())
+  code                 String    @unique // 9-digit NAPPI code
+  description          String    @db.Text
+  shortDescription     String?   @map("short_description")
+  genericName          String?   @map("generic_name")
+  strength             String? // e.g., "500mg"
+  form                 String? // e.g., "TABLET", "SYRUP", "INJECTION"
+  packSize             Int       @default(1) @map("pack_size")
+  unitOfMeasure        String    @map("unit_of_measure") // TABLET, ML, VIAL
+  singleExitPrice      Float?    @map("single_exit_price") // SEP - government regulated
+  nappiType            String?   @map("nappi_type") // ETHICAL, SCHEDULED, OVER_COUNTER
+  schedule             String? // 0-8 (South African drug schedule)
+  atcCode              String?   @map("atc_code") // Anatomical Therapeutic Chemical
+  isPrescriptionReq    Boolean   @default(true) @map("is_prescription_required")
+  isControlled         Boolean   @default(false) @map("is_controlled")
+  isChronic            Boolean   @default(false) @map("is_chronic")
+  isCdl                Boolean   @default(false) @map("is_cdl") // Chronic Disease List
+  defaultDispensingFee Float?    @map("default_dispensing_fee")
+  defaultContainerFee  Float?    @map("default_container_fee")
+  isActive             Boolean   @default(true) @map("is_active")
+  effectiveFrom        DateTime  @map("effective_from")
+  effectiveTo          DateTime? @map("effective_to")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  prescriptionItems PrescriptionItem[]
+  stockBatches      StockBatch[]
+  products          Product[]
+  billItems         BillItem[]
+  claimItems        ClaimItem[]
+
+  @@index([code])
+  @@index([schedule])
+  @@index([atcCode])
+  @@map("nappi_codes")
+}
+
+// Scheme Options - From Detailed Doctor Option List PDF
+model SchemeOption {
+  id                   String    @id @default(cuid())
+  schemeCode           String    @map("scheme_code") // e.g., "50318" for GEMS
+  schemeName           String    @map("scheme_name")
+  optionCode           String    @map("option_code") // Full 6-digit MediKredit option code
+  optionName           String    @map("option_name")
+  administrator        String? // e.g., "multi-managed gems"
+  optionType           String?   @map("option_type") // HL, P
+  claimType            String?   @map("claim_type") // DD, P&C
+  authCheck            Boolean   @default(false) @map("auth_check")
+  famCheck             Boolean   @default(false) @map("fam_check")
+  chfChecks            Boolean   @default(false) @map("chf_checks")
+  mmapRefUrp           String?   @map("mmap_ref_urp") // Y/N
+  pricing              String? // Y/N
+  markUpFormula        String?   @map("mark_up_formula") // e.g., "R0-R160.00 : 30.00%, Max R48.00"
+  dispensingFeeFormula String?   @map("dispensing_fee_formula")
+  switchOut            Boolean   @default(false) @map("switch_out")
+  membershipPrefix     String?   @map("membership_prefix")
+  membershipLength     Int?      @map("membership_length")
+  membershipSuffix     String?   @map("membership_suffix")
+  reversalPeriod       String?   @map("reversal_period") // e.g., "120", "Same Day"
+  isSep                Boolean   @default(false) @map("is_sep") // Single Exit Price product
+  isActive             Boolean   @default(true) @map("is_active")
+  effectiveFrom        DateTime  @map("effective_from")
+  effectiveTo          DateTime? @map("effective_to")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  patientSchemeDetails PatientSchemeDetail[]
+  claimSchemeDetails   ClaimSchemeDetail[]
+  claims               Claim[]
+
+  @@unique([schemeCode, optionCode])
+  @@index([schemeCode])
+  @@index([optionCode])
+  @@map("scheme_options")
+}
+
+// Clinical Test Types (Appendix F from Global HealthNet spec, pages 62-86)
+model ClinicalTestType {
+  id          String   @id @default(cuid())
+  type        String   @unique // e.g., "14" for General
+  description String // e.g., "General"
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  clinicalSubTypes ClinicalSubType[]
+  clinicalDetails  ClinicalDetail[]
+
+  @@map("clinical_test_types")
+}
+
+model ClinicalSubType {
+  id             String   @id @default(cuid())
+  clinicalTypeId String   @map("clinical_type_id")
+  subtype        String // e.g., "04" for Haemoglobin
+  description    String // e.g., "Haemoglobin"
+  uom            String? // Unit of Measure (e.g., "g/dL")
+  isMandatory    Boolean  @default(false) @map("is_mandatory")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  clinicalType    ClinicalTestType @relation(fields: [clinicalTypeId], references: [id], onDelete: Cascade)
+  clinicalDetails ClinicalDetail[]
+
+  @@unique([clinicalTypeId, subtype])
+  @@map("clinical_sub_types")
+}
+
+// Place of Service Codes (PHISC Table 4, Page 82)
+model PlaceOfServiceCode {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g., "11", "21", "22"
+  description String
+  isInpatient Boolean  @default(false) @map("is_inpatient")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  doctorDetails DoctorDetail[]
+
+  @@map("place_of_service_codes")
+}
+
+// Disposal Codes (PHISC concept, from MediKredit spec page 54-55)
+model DisposalCode {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g., "01", "07", "20", "30"
+  description String
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  doctorDetails DoctorDetail[]
+
+  @@map("disposal_codes")
+}
+
+// Council Types (PHISC Table 1, Page 82)
+model CouncilType {
+  id          String   @id @default(cuid())
+  code        String   @unique // "01", "02", "03", "04", "05", "06"
+  name        String // HPCSA, AHPCSA, SACSSP, SADTC, SANC, SAPC
+  description String
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  doctors          Doctor[] // If linking to Doctor model
+  assistants       Assistant[]
+  dentalLabDetails DentalLabDetail[]
+
+  @@map("council_types")
+}
+
+// Benefit Types (PHISC Table 13, Page 84)
+model BenefitType {
+  id          String   @id @default(cuid())
+  code        String   @unique // "001", "002", etc.
+  description String // "Acute", "Appliances", etc.
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimItems ClaimItemBenefit[]
+
+  @@map("benefit_types")
+}
+
+// Deduction Types (PHISC Table 14, Page 84)
+model DeductionType {
+  id          String   @id @default(cuid())
+  code        String   @unique // "01", "02"
+  description String // "Levy", "Co-payment"
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  eraClaimDeductions EraClaimDeduction[]
+  eraLineDeductions  EraLineDeduction[]
+
+  @@map("deduction_types")
+}
+
+// Pricing Tariff Indicators (PHISC Table 9, Page 83)
+model PricingTariffIndicator {
+  id          String   @id @default(cuid())
+  code        String   @unique // "01" through "10"
+  description String // "NHRPL Rate", "COID", "Single Exit Price (SEP)", etc.
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimFinancials ClaimFinancial[]
+  itemFinancials  ItemFinancial[]
+
+  @@map("pricing_tariff_indicators")
+}
+
+// Coding Set Indicators (MediKredit spec page 14)
+model CodingSet {
+  id          String   @id @default(cuid())
+  code        String   @unique // "02", "03", "07"
+  description String // "BHF/NRPL", "NAPPI", "NAMAF"
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimItems ClaimItem[]
+
+  @@map("coding_sets")
+}
+
+// Item Type Indicators (MediKredit spec page 14, PHISC Table 6, Page 82)
+model ItemType {
+  id          String   @id @default(cuid())
+  code        String   @unique // "1", "2", "3", "4", "5", "6"
+  description String // "Medicine", "Tariff", "Modifier + Tariff", "Tariff + Medicine", "Modifier only", "Dental Combo"
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimItems ClaimItem[]
+
+  @@map("item_types")
+}
+
+// Transaction Codes (MediKredit spec page 2, 12, 18, 20, 22)
+model TransactionCode {
+  id          String   @id @default(cuid())
+  code        String   @unique // "11", "20", "21", "22", "23", "30", "31", "32", "33"
+  description String // "Claim Reversal", "Doctor Eligibility", "Doctor Adjudication", etc.
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claims Claim[]
+
+  @@map("transaction_codes")
+}
+
+// ==================== CORE BUSINESS MODELS ====================
+
+model Practice {
+  id                    String   @id @default(cuid())
+  practiceDisplayId     String?  @unique @map("practice_display_id")
+  bhfNumber             String   @unique @map("bhf_number") // PCNS number (PHISC 2.3.2)
+  practiceName          String   @map("practice_name")
+   practiceType          String   @map("practice_type") // CASH_ONLY, MEDICAL_AID_ONLY, CASH_AND_MEDICAL_AID
+  vatNumber             String?  @map("vat_number")
+  cipcNumber            String?  @map("cipc_number")
+  email                 String?
+  phone                 String?
+  isActive              Boolean  @default(true) @map("is_active")
+  billingPolicy         String?  @map("billing_policy") @db.Text
+  roomsDefaultRate      Float?   @map("rooms_default_rate")
+  inHospitalDefaultRate Float?   @map("inhospital_default_rate")
+  additionalNotes       String?  @map("additional_notes") @db.Text
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  bankDetails          BankDetail[]
+  contracts            PracticeContract[]
+  documents            PracticeDocument[]
+  disciplines          PracticeDiscipline[]
+  locations            PracticeLocation[]
+  specializations      PracticeSpecialization[]
+  doctorPractices      DoctorPractice[]
+  practiceWorkingHours PracticeWorkingHours[]
+  eras                 Era[]
+  claims               Claim[]
+
+  @@map("practices")
+}
+
+model PracticeDiscipline {
+  id             String   @id @default(cuid())
+  practiceId     String   @map("practice_id")
+  disciplineCode String?  @map("discipline_code") // 014, 016, etc.
+  disciplineName String   @map("discipline_name")
+  isOther        Boolean  @default(false) @map("is_other")
+  otherText      String?  @map("other_text")
+  practice       Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId])
+  @@map("practice_disciplines")
+}
+
+model PracticeSpecialization {
+  id                 String   @id @default(cuid())
+  practiceId         String   @map("practice_id")
+  specializationName String   @map("specialization_name")
+  isOther            Boolean  @default(false) @map("is_other")
+  otherText          String?  @map("other_text")
+  subSpecialization  String?  @map("sub_specialization")
+  isSubOther         Boolean  @default(false) @map("is_sub_other")
+  subOtherText       String?  @map("sub_other_text")
+  practice           Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId])
+  @@map("practice_specializations")
+}
+
+model PracticeLocation {
+  id             String        @id @default(cuid())
+  practiceId     String        @map("practice_id")
+  isMain         Boolean       @default(false) @map("is_main")
+  locationNumber Int           @map("location_number")
+  addressLine1   String        @map("address_line1")
+  addressLine2   String?       @map("address_line2")
+  suburb         String
+  city           String
+  province       String
+  postalCode     String        @map("postal_code")
+  practice       Practice      @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  appointments   Appointment[]
+
+  @@index([practiceId])
+  @@map("practice_locations")
+}
+
+model PracticeWorkingHours {
+  id         String   @id @default(cuid())
+  practiceId String   @map("practice_id")
+  dayOfWeek  Int      @map("day_of_week") // 0=Sunday, 1=Monday, etc.
+  isOpen     Boolean  @default(true) @map("is_open")
+  startTime1 String?  @map("start_time1")
+  endTime1   String?  @map("end_time1")
+  startTime2 String?  @map("start_time2")
+  endTime2   String?  @map("end_time2")
+  is24Hours  Boolean  @default(false) @map("is_24_hours")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  practice   Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@map("practice_working_hours")
+}
+
+model BankDetail {
+  id               String   @id @default(cuid())
+  practiceId       String   @map("practice_id")
+  bankName         String   @map("bank_name")
+  branchName       String?  @map("branch_name")
+  branchCode       String?  @map("branch_code")
+  accountNumber    String   @map("account_number")
+  accountType      String?  @map("account_type") // Savings, Cheque, Transaction
+  accountHolder    String?  @map("account_holder")
+  bankAddress      String?  @map("bank_address") @db.Text
+  isBankOther      Boolean  @default(false) @map("is_bank_other")
+  bankOtherText    String?  @map("bank_other_text")
+  isAccountOther   Boolean  @default(false) @map("is_account_other")
+  accountOtherText String?  @map("account_other_text")
+  practice         Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId])
+  @@map("bank_details")
+}
+
+model PracticeContract {
+  id           String    @id @default(cuid())
+  practiceId   String    @map("practice_id")
+  contractType String    @map("contract_type") // Network, DSP, REPI, CAPITATION, FEE_FOR_SERVICE
+  isOther      Boolean   @default(false) @map("is_other")
+  otherText    String?   @map("other_text")
+  schemeAdmin  String?   @map("scheme_admin")
+  scheme       String
+  plan         String?
+  category     String?
+  level        String?
+  rateType     String    @map("rate_type") // Fixed Amount, Percentage
+  amount       Float
+  startDate    DateTime? @map("start_date")
+  endDate      DateTime? @map("end_date")
+  practice     Practice  @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId])
+  @@map("practice_contracts")
+}
+
+model PracticeDocument {
+  id           String   @id @default(cuid())
+  practiceId   String   @map("practice_id")
+  documentName String   @map("document_name")
+  fileUrl      String   @map("file_url")
+  fileType     String?  @map("file_type")
+  fileSize     Int?     @map("file_size")
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+  practice     Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId])
+  @@map("practice_documents")
+}
+
+model Doctor {
+  id                      String      @id @default(cuid())
+  doctorDisplayId         String?     @unique @map("doctor_display_id")
+  title                   String? // Dr, Prof, Mr, Ms
+  firstName               String      @map("first_name")
+  lastName                String      @map("last_name")
+  initials                String
+  email                   String?
+  phone                   String?
+  hpcsaNumber             String      @unique @map("hpcsa_number")
+  practiceNumber          String?     @map("practice_number") // BHF/PCNS number
+  councilTypeId           String?     @map("council_type_id") // PHISC Table 1
+  dispensingLicenseNo     String?     @map("dispensing_license_no")
+  dispensingLicenseExpiry DateTime?   @map("dispensing_license_expiry")
+  disciplineCode          String?     @map("discipline_code") // 014=GP, 016=Specialist
+  disciplineName          String?     @map("discipline_name")
+  disciplineIsOther       Boolean     @default(false) @map("discipline_is_other")
+  disciplineOtherText     String?     @map("discipline_other_text")
+  specialisationCode      String?     @map("specialisation_code")
+  specialisationName      String?     @map("specialisation_name")
+  specialisationIsOther   Boolean     @default(false) @map("specialisation_is_other")
+  specialisationOtherText String?     @map("specialisation_other_text")
+  subSpecialisation       String?     @map("sub_specialisation")
+  subIsOther              Boolean     @default(false) @map("sub_is_other")
+  subOtherText            String?     @map("sub_other_text")
+  isNetwork               Boolean     @default(false) @map("is_network")
+  isIpa                   Boolean     @default(false) @map("is_ipa")
+  isDispensing            Boolean     @default(false) @map("is_dispensing")
+  roomsDefaultRate        Float?      @map("rooms_default_rate")
+  inHospitalDefaultRate   Float?      @map("inhospital_default_rate")
+  isActive                Boolean     @default(true) @map("is_active")
+  createdAt               DateTime    @default(now()) @map("created_at")
+  updatedAt               DateTime    @updatedAt @map("updated_at")
+  prescribingBhf          BhfDetail[] @relation("PrescribingDoctor")
+  referringBhf            BhfDetail[] @relation("ReferringDoctor")
+  admittingBhf            BhfDetail[] @relation("AdmittingDoctor")
+
+  councilType          CouncilType?         @relation(fields: [councilTypeId], references: [id])
+  practices            DoctorPractice[]
+  contracts            DoctorContract[]
+  appointments         Appointment[]
+  prescriptions        Prescription[]
+  doctorAvailabilities DoctorAvailability[]
+  doctorTimeRanges     DoctorTimeRange[]
+  doctorDetails        DoctorDetail[]
+  assistantDetails     Assistant[]
+  eraProviders         EraProvider[]
+  claims               Claim[]
+  bhfDetails           BhfDetail[]
+
+  @@index([hpcsaNumber])
+  @@index([practiceNumber])
+  @@map("doctors")
+}
+
+model DoctorPractice {
+  doctorId   String    @map("doctor_id")
+  practiceId String    @map("practice_id")
+  startDate  DateTime? @map("start_date")
+  isActive   Boolean   @default(true) @map("is_active")
+
+  doctor   Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  practice Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@id([doctorId, practiceId])
+  @@map("doctor_practices")
+}
+
+model DoctorContract {
+  id           String    @id @default(cuid())
+  doctorId     String    @map("doctor_id")
+  contractType String    @map("contract_type") // Network, DSP, REPI, CAPITATION, FEE_FOR_SERVICE
+  isOther      Boolean   @default(false) @map("is_other")
+  otherText    String?   @map("other_text")
+  schemeAdmin  String?   @map("scheme_admin")
+  scheme       String
+  plan         String?
+  category     String?
+  level        String?
+  rateType     String    @map("rate_type")
+  amount       Float
+  startDate    DateTime? @map("start_date")
+  endDate      DateTime? @map("end_date")
+  doctor       Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId])
+  @@map("doctor_contracts")
+}
+
+model DoctorAvailability {
+  id           String   @id @default(cuid())
+  doctorId     String   @map("doctor_id")
+  dayOfWeek    Int      @map("day_of_week")
+  startTime    String   @map("start_time")
+  endTime      String   @map("end_time")
+  slotDuration Int      @default(15) @map("slot_duration")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  doctor       Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, dayOfWeek])
+  @@map("doctor_availability")
+}
+
+model DoctorTimeRange {
+  id           String    @id @default(cuid())
+  doctorId     String    @map("doctor_id")
+  date         DateTime? @map("date")
+  dayOfWeek    Int?      @map("day_of_week")
+  startTime    String    @map("start_time")
+  endTime      String    @map("end_time")
+  slotDuration Int       @default(15) @map("slot_duration")
+  isRecurring  Boolean   @default(false) @map("is_recurring")
+  isActive     Boolean   @default(true) @map("is_active")
+  description  String?   @map("description")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  doctor       Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId])
+  @@index([date])
+  @@index([dayOfWeek])
+  @@map("doctor_time_ranges")
+}
+
+model Patient {
+  id                    String    @id @default(cuid())
+  patientDisplayId      String?   @unique @map("patient_display_id")
+  familyId              String?   @map("family_id")
+  title                 String
+  firstName             String    @map("first_name")
+  lastName              String    @map("last_name")
+  initials              String
+  idType                String    @map("id_type") // SA_ID, PASSPORT, OTHER
+  idNumber              String?   @unique @map("id_number")
+  passportNumber        String?   @map("passport_number")
+  dateOfBirth           DateTime  @map("date_of_birth")
+  gender                String // M, F, U (PHISC Table 20, Page 85)
+  email                 String?
+  phone                 String
+  addressLine1          String    @map("address_line1")
+  addressLine2          String?   @map("address_line2")
+  suburb                String
+  city                  String
+  province              String
+  postalCode            String    @map("postal_code")
+  occupation            String?
+  employer              String?
+  workPhone             String?   @map("work_phone")
+  maritalStatus         String    @map("marital_status")
+  emergencyContactName  String    @map("emergency_contact_name")
+  emergencyContactPhone String    @map("emergency_contact_phone")
+  relationshipToPatient String    @map("relationship_to_patient")
+  isNewborn             Boolean   @default(false) @map("is_newborn")
+  birthTime             String?   @map("birth_time")
+  isEmergency           Boolean   @default(false) @map("is_emergency")
+  receivedTime          DateTime? @map("received_time")
+  race                  String? // A=Asian, B=Black, C=Coloured, W=White (MediKredit spec page 9)
+  weight                Int? // in grams
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  patientSchemeDetails PatientSchemeDetail[]
+  appointments         Appointment[]
+  documents            PatientDocument[]
+  prescriptions        Prescription[]
+  bills                Bill[]
+  patientReports       PatientReport[]
+  diagnosisRecords     DiagnosisRecord[]
+  procedureRecords     ProcedureRecord[]
+  claimPatients        ClaimPatient[]
+  eraClaimPatients     EraClaimPatient[]
+  claims               Claim[]
+  eraLinePatients      EraLinePatient[]
+
+  @@index([idNumber])
+  @@index([familyId])
+  @@map("patients")
+}
+
+model PatientSchemeDetail {
+  id                 String    @id @default(cuid())
+  patientId          String    @map("patient_id")
+  schemeOptionId     String    @map("scheme_option_id")
+  memberNumber       String    @map("member_number")
+  dependantCode      String    @map("dependant_code") // "01" for main member, "02", etc.
+  mainMemberName     String?   @map("main_member_name")
+  mainMemberIdNumber String?   @map("main_member_id_number")
+  dateJoined         DateTime? @map("date_joined")
+  gapCover           Boolean   @default(false) @map("gap_cover")
+  gapCoverDetails    String?   @map("gap_cover_details")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  schemeOption SchemeOption @relation(fields: [schemeOptionId], references: [id])
+
+  @@unique([patientId, schemeOptionId])
+  @@index([memberNumber])
+  @@index([dependantCode])
+  @@map("patient_scheme_details")
+}
+
+model PatientDocument {
+  id           String   @id @default(cuid())
+  patientId    String   @map("patient_id")
+  documentName String   @map("document_name")
+  fileUrl      String   @map("file_url")
+  fileType     String?  @map("file_type")
+  fileSize     Int?     @map("file_size")
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_documents")
+}
+
+model PatientReport {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  appointmentId   String?  @map("appointment_id")
+  reportType      String   @map("report_type") // LAB, RADIOLOGY, PATHOLOGY, OTHER
+  reportName      String   @map("report_name")
+  fileUrl         String   @map("file_url")
+  fileSize        Int?     @map("file_size")
+  mimeType        String?  @map("mime_type")
+  uploadedBy      String?  @map("uploaded_by")
+  uploadedAt      DateTime @default(now()) @map("uploaded_at")
+  aiExtractedData Json?    @map("ai_extracted_data")
+  aiSummary       String?  @map("ai_summary") @db.Text
+  aiFindings      Json?    @map("ai_findings")
+
+  patient     Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+
+  @@index([patientId])
+  @@index([appointmentId])
+  @@map("patient_reports")
+}
+
+model Appointment {
+  id                        String    @id @default(cuid())
+  appointmentDisplayId      String?   @unique @map("appointment_display_id")
+  patientId                 String    @map("patient_id")
+  doctorId                  String    @map("doctor_id")
+  practiceLocationId        String?   @map("practice_location_id")
+  date                      DateTime
+  timeSlot                  String    @map("time_slot")
+  status                    String    @default("booked")
+  reasonForVisit            String?   @map("reason_for_visit") @db.Text
+  pastMedication            String?   @map("past_medication") @db.Text
+  medicalHistory            Json?     @map("medical_history")
+  height                    Float?
+  weight                    Float? // in grams
+  previousDoctors           Json?     @map("previous_doctors")
+  documents                 Json?
+  vitals                    Json?
+  cancellationReason        String?   @map("cancellation_reason")
+  cancelledAt               DateTime? @map("cancelled_at")
+  rescheduledFrom           Json?     @map("rescheduled_from")
+  rescheduleReason          String?   @map("reschedule_reason")
+  rescheduledAt             DateTime? @map("rescheduled_at")
+  rescheduledBy             String?   @map("rescheduled_by")
+  soapSubjective            String?   @map("soap_subjective") @db.LongText
+  soapObjective             String?   @map("soap_objective") @db.LongText
+  soapAssessment            String?   @map("soap_assessment") @db.LongText
+  soapPlan                  String?   @map("soap_plan") @db.LongText
+  consultationNotes         String?   @map("consultation_notes") @db.LongText
+  doctorNotes               String?   @map("doctor_notes") @db.LongText
+  patientNotes              String?   @map("patient_notes") @db.LongText
+  clinicalNotes             String?   @map("clinical_notes") @db.LongText
+  assessment                String?   @db.LongText
+  plan                      String?   @db.LongText
+  consultationStatus        String    @default("PENDING") @map("consultation_status")
+  triageStatus              String    @default("PENDING") @map("triage_status")
+  calledInAt                DateTime? @map("called_in_at")
+  calledOutAt               DateTime? @map("called_out_at")
+  consultationStartedAt     DateTime? @map("consultation_started_at")
+  consultationEndedAt       DateTime? @map("consultation_ended_at")
+  videoRoomId               String?   @map("video_room_id")
+  videoInviteSentAt         DateTime? @map("video_invite_sent_at")
+  videoStartedAt            DateTime? @map("video_started_at")
+  videoEndedAt              DateTime? @map("video_ended_at")
+  aiGeneratedSummary        String?   @map("ai_generated_summary") @db.LongText
+  aiPrescriptionSuggestions Json?     @map("ai_prescription_suggestions")
+  aiDiagnosisSuggestions    Json?     @map("ai_diagnosis_suggestions")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
+
+  patient               Patient                @relation(fields: [patientId], references: [id])
+  doctor                Doctor                 @relation(fields: [doctorId], references: [id])
+  practiceLocation      PracticeLocation?      @relation(fields: [practiceLocationId], references: [id])
+  referrals             Referral[]
+  referredFromId        String?                @unique @map("referred_from_id")
+  referredFrom          Referral?              @relation("ReferredAppointment")
+  prescriptions         Prescription[]
+  diagnosisRecords      DiagnosisRecord[]
+  procedureRecords      ProcedureRecord[]
+  bills                 Bill[]
+  claims                Claim[]
+  clinicalDetails       ClinicalDetail[]
+  aiConsultationSummary AiConsultationSummary?
+  patientReports        PatientReport[]
+
+  @@unique([doctorId, date, timeSlot])
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([date])
+  @@index([status])
+  @@map("appointments")
+}
+
+model Referral {
+  id                      String    @id @default(cuid())
+  referralDisplayId       String?   @unique @map("referral_display_id")
+  appointmentId           String    @map("appointment_id")
+  referredToDoctorId      String?   @map("referred_to_doctor_id")
+  referredToDoctorName    String    @map("referred_to_doctor_name")
+  referredToPracticeName  String?   @map("referred_to_practice_name")
+  referralType            String    @map("referral_type") // INTERNAL, EXTERNAL, SPECIALIST
+  referralReason          String    @map("referral_reason")
+  referralNotes           String?   @map("referral_notes") @db.Text
+  urgency                 String // ROUTINE, URGENT, EMERGENCY
+  practiceLocation        String?   @map("practice_location")
+  externalPracticeName    String?   @map("external_practice_name")
+  externalPracticeAddress String?   @map("external_practice_address") @db.Text
+  externalPracticePhone   String?   @map("external_practice_phone")
+  sendNotification        Boolean   @default(true) @map("send_notification")
+  shareMedicalRecords     Boolean   @default(true) @map("share_medical_records")
+  notesForReferredDoctor  String?   @map("notes_for_referred_doctor") @db.Text
+  status                  String    @default("PENDING") // PENDING, ACCEPTED, DECLINED, COMPLETED
+  referredAt              DateTime  @default(now()) @map("referred_at")
+  respondedAt             DateTime? @map("responded_at")
+  responseNotes           String?   @map("response_notes") @db.Text
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  newAppointmentId        String?   @unique @map("new_appointment_id")
+
+  appointment    Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  newAppointment Appointment? @relation("ReferredAppointment", fields: [newAppointmentId], references: [id])
+
+  @@index([appointmentId])
+  @@index([referredToDoctorId])
+  @@index([status])
+  @@map("referrals")
+}
+
+model DiagnosisRecord {
+  id            String   @id @default(cuid())
+  appointmentId String   @map("appointment_id")
+  icdCodeId     String   @map("icd_code_id")
+  isPrimary     Boolean  @default(false) @map("is_primary")
+  isSecondary   Boolean  @default(false) @map("is_secondary")
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  icdCode     Icd10Code   @relation(fields: [icdCodeId], references: [id])
+  patient     Patient?    @relation(fields: [patientId], references: [id])
+  patientId   String?
+
+  @@index([appointmentId])
+  @@map("diagnosis_records")
+}
+
+model ProcedureRecord {
+  id            String   @id @default(cuid())
+  appointmentId String   @map("appointment_id")
+  tariffCodeId  String   @map("tariff_code_id")
+  quantity      Int      @default(1)
+  unitPrice     Float    @map("unit_price")
+  totalAmount   Float    @map("total_amount")
+  icdCodeId     String?  @map("icd_code_id")
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  appointment Appointment         @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  tariffCode  TariffCode          @relation(fields: [tariffCodeId], references: [id])
+  icdCode     Icd10Code?          @relation(fields: [icdCodeId], references: [id])
+  modifiers   ProcedureModifier[]
+  patient     Patient?            @relation(fields: [patientId], references: [id])
+  patientId   String?
+
+  @@index([appointmentId])
+  @@map("procedure_records")
+}
+
+model ProcedureModifier {
+  id                String @id @default(cuid())
+  procedureRecordId String @map("procedure_record_id")
+  modifierCodeId    String @map("modifier_code_id")
+  value             Float? // Custom value if percentage or fixed amount
+
+  procedureRecord ProcedureRecord @relation(fields: [procedureRecordId], references: [id], onDelete: Cascade)
+  modifierCode    ModifierCode    @relation(fields: [modifierCodeId], references: [id])
+
+  @@unique([procedureRecordId, modifierCodeId])
+  @@map("procedure_modifiers")
+}
+
+// Clinical Results (MediKredit spec pages 12, 24, Appendix F)
+model ClinicalDetail {
+  id                String   @id @default(cuid())
+  appointmentId     String?  @map("appointment_id")
+  claimItemId       String?  @map("claim_item_id")
+  clinicalTypeId    String   @map("clinical_type_id")
+  clinicalSubTypeId String   @map("clinical_sub_type_id")
+  value             String // The actual result value
+  uom               String? // Unit of Measure (from ClinicalSubType)
+  consent           Boolean  @default(true) // Patient consent obtained
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  appointment     Appointment?     @relation(fields: [appointmentId], references: [id])
+  claimItem       ClaimItem?       @relation(fields: [claimItemId], references: [id])
+  clinicalType    ClinicalTestType @relation(fields: [clinicalTypeId], references: [id])
+  clinicalSubType ClinicalSubType  @relation(fields: [clinicalSubTypeId], references: [id])
+
+  @@index([appointmentId])
+  @@index([claimItemId])
+  @@map("clinical_details")
+}
+
+model Prescription {
+  id               String   @id @default(cuid())
+  prescriptionNo   String   @unique @map("prescription_no")
+  appointmentId    String   @map("appointment_id")
+  patientId        String   @map("patient_id")
+  doctorId         String   @map("doctor_id")
+  prescriptionDate DateTime @default(now()) @map("prescription_date")
+  status           String   @default("ACTIVE") // ACTIVE, DISPENSED, PARTIAL, CANCELLED, EXPIRED
+  notes            String?  @db.Text
+  createdBy        String?  @map("created_by")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  appointment Appointment        @relation(fields: [appointmentId], references: [id])
+  patient     Patient            @relation(fields: [patientId], references: [id])
+  doctor      Doctor             @relation(fields: [doctorId], references: [id])
+  items       PrescriptionItem[]
+
+  @@index([prescriptionNo])
+  @@index([appointmentId])
+  @@index([patientId])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id                String    @id @default(cuid())
+  prescriptionId    String    @map("prescription_id")
+  nappiCodeId       String    @map("nappi_code_id")
+  quantity          Int
+  dosage            String? // e.g., "1 tablet 3 times daily"
+  duration          Int? // Duration in days
+  durationUnit      String?   @map("duration_unit") // DAYS, WEEKS, MONTHS
+  timing            String? // BEFORE_MEAL, AFTER_MEAL, WITH_MEAL, BEDTIME
+  frequency         String? // e.g., "3 times daily", "once daily"
+  instructions      String?   @db.Text
+  icdCodeId         String?   @map("icd_code_id")
+  isChronic         Boolean   @default(false) @map("is_chronic")
+  isCdl             Boolean   @default(false) @map("is_cdl")
+  isMixture         Int?      @default(0) @map("is_mixture")
+  repeats           Int?      @default(0)
+  repeatsUsed       Int?      @default(0) @map("repeats_used")
+  unitPrice         Float     @map("unit_price")
+  dispensingFee     Float?    @map("dispensing_fee")
+  totalAmount       Float     @map("total_amount")
+  status            String    @default("PENDING") // PENDING, DISPENSED, PARTIAL, CANCELLED
+  quantityDispensed Int?      @default(0) @map("quantity_dispensed")
+  dispensedAt       DateTime? @map("dispensed_at")
+  dispensedBy       String?   @map("dispensed_by")
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  nappiCode    NappiCode    @relation(fields: [nappiCodeId], references: [id])
+  icdCode      Icd10Code?   @relation(fields: [icdCodeId], references: [id])
+  product      Product?     @relation(fields: [productId], references: [id])
+  productId    String?
+
+  @@index([prescriptionId])
+  @@index([nappiCodeId])
+  @@map("prescription_items")
+}
+
+model Bill {
+  id               String    @id @default(cuid())
+  billNumber       String    @unique @map("bill_number")
+  appointmentId    String    @map("appointment_id")
+  patientId        String    @map("patient_id")
+  billDate         DateTime  @default(now()) @map("bill_date")
+  dueDate          DateTime? @map("due_date")
+  status           String    @default("DRAFT") // DRAFT, SUBMITTED, PARTIAL_PAID, PAID, WRITTEN_OFF, DISPUTED
+  subtotal         Float
+  vatAmount        Float     @map("vat_amount")
+  totalAmount      Float     @map("total_amount")
+  amountPaid       Float     @default(0) @map("amount_paid")
+  balanceDue       Float     @map("balance_due")
+  paymentMethod    String?   @map("payment_method") // CASH, CARD, MEDICAL_AID, EFT
+  paymentReference String?   @map("payment_reference")
+  paidAt           DateTime? @map("paid_at")
+  notes            String?   @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  patient     Patient     @relation(fields: [patientId], references: [id])
+  items       BillItem[]
+  claim       Claim?
+
+  @@index([billNumber])
+  @@index([appointmentId])
+  @@index([status])
+  @@map("bills")
+}
+
+model BillItem {
+  id               String  @id @default(cuid())
+  billId           String  @map("bill_id")
+  type             String // PROCEDURE, MEDICINE, MATERIAL, CONSULTATION
+  referenceId      String? @map("reference_id") // procedure_record_id or prescription_item_id
+  description      String  @db.Text
+  quantity         Int
+  unitPrice        Float   @map("unit_price")
+  vatRate          Float   @default(15.0) @map("vat_rate")
+  vatAmount        Float   @map("vat_amount")
+  totalAmount      Float   @map("total_amount")
+  medicalAidLiable Float?  @map("medical_aid_liable")
+  patientLiable    Float?  @map("patient_liable")
+  nappiCodeId      String? @map("nappi_code_id")
+  icdCodeId        String? @map("icd_code_id")
+
+  bill              Bill                @relation(fields: [billId], references: [id], onDelete: Cascade)
+  nappiCode         NappiCode?          @relation(fields: [nappiCodeId], references: [id])
+  icdCode           Icd10Code?          @relation(fields: [icdCodeId], references: [id])
+  modifiers         BillModifier[]
+  claimItems        ClaimItem[]
+  billItemDiagnoses BillItemDiagnosis[]
+
+  @@map("bill_items")
+}
+
+model BillItemDiagnosis {
+  id         String  @id @default(cuid())
+  billItemId String  @map("bill_item_id")
+  icdCodeId  String  @map("icd_code_id")
+  isPrimary  Boolean @default(false) @map("is_primary")
+
+  billItem BillItem  @relation(fields: [billItemId], references: [id], onDelete: Cascade)
+  icdCode  Icd10Code @relation(fields: [icdCodeId], references: [id])
+
+  @@unique([billItemId, icdCodeId])
+  @@map("bill_item_diagnoses")
+}
+
+model BillModifier {
+  id             String @id @default(cuid())
+  billItemId     String @map("bill_item_id")
+  modifierCodeId String @map("modifier_code_id")
+  value          Float?
+
+  billItem     BillItem     @relation(fields: [billItemId], references: [id], onDelete: Cascade)
+  modifierCode ModifierCode @relation(fields: [modifierCodeId], references: [id])
+
+  @@unique([billItemId, modifierCodeId])
+  @@map("bill_modifiers")
+}
+
+// ==================== CLAIMS & ERA MODELS ====================
+
+model Claim {
+  id                String    @id @default(cuid())
+  claimNumber       String    @unique @map("claim_number")
+  billId            String    @unique @map("bill_id")
+  appointmentId     String    @map("appointment_id")
+  patientId         String    @map("patient_id")
+  doctorId          String    @map("doctor_id")
+  practiceId        String    @map("practice_id")
+  schemeOptionId    String    @map("scheme_option_id")
+  transactionCodeId String    @map("transaction_code_id") // 21=Doctor Adjudication, 11=Reversal, etc.
+  submissionDate    DateTime  @default(now()) @map("submission_date")
+  dateOfService     DateTime  @map("date_of_service")
+  status            String    @default("PENDING") // PENDING, SUBMITTED, APPROVED, PARTIAL, REJECTED, PAID
+  submissionXml     String?   @map("submission_xml") @db.LongText
+  responseXml       String?   @map("response_xml") @db.LongText
+  responseJson      Json?     @map("response_json")
+  submittedAmount   Float     @map("submitted_amount")
+  approvedAmount    Float?    @map("approved_amount")
+  paidAmount        Float?    @map("paid_amount")
+  rejectionReason   String?   @map("rejection_reason") @db.Text
+  submittedAt       DateTime? @map("submitted_at")
+  approvedAt        DateTime? @map("approved_at")
+  paidAt            DateTime? @map("paid_at")
+  reversalClaimId   String?   @map("reversal_claim_id") // For reversals, link to original claim
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  bill              Bill               @relation(fields: [billId], references: [id])
+  appointment       Appointment        @relation(fields: [appointmentId], references: [id])
+  patient           Patient            @relation(fields: [patientId], references: [id])
+  doctor            Doctor             @relation(fields: [doctorId], references: [id])
+  practice          Practice           @relation(fields: [practiceId], references: [id])
+  schemeOption      SchemeOption       @relation(fields: [schemeOptionId], references: [id])
+  transactionCode   TransactionCode    @relation(fields: [transactionCodeId], references: [id])
+  reversalClaim     Claim?             @relation("ClaimReversal", fields: [reversalClaimId], references: [id])
+  reversedClaims    Claim[]            @relation("ClaimReversal")
+  claimItems        ClaimItem[]
+  claimSchemeDetail ClaimSchemeDetail?
+  claimPatient      ClaimPatient?
+  claimFinancial    ClaimFinancial?
+  eraClaim          EraClaim[]
+  doctorDetails     DoctorDetail[]
+  bhfDetails        BhfDetail[]
+  otherDetails      OtherDetail[]
+
+  @@index([claimNumber])
+  @@index([status])
+  @@index([submissionDate])
+  @@map("claims")
+}
+
+model ClaimItem {
+  id               String  @id @default(cuid())
+  claimId          String  @map("claim_id")
+  billItemId       String? @map("bill_item_id") // Link back to original bill item
+  lineNumber       Int     @map("line_number")
+  itemTypeId       String  @map("item_type_id") // 1=Medicine, 2=Tariff, etc.
+  codingSetId      String  @map("coding_set_id") // 02=BHF/NRPL, 03=NAPPI, 07=NAMAF
+  code             String // Tariff code or NAPPI code
+  description      String
+  quantity         Int
+  unitPrice        Float   @map("unit_price")
+  totalAmount      Float   @map("total_amount")
+  nappiCodeId      String? @map("nappi_code_id")
+  tariffCodeId     String? @map("tariff_code_id")
+  status           String  @default("SUBMITTED")
+  responseCode     String? @map("response_code")
+  responseMessage  String? @map("response_message")
+  schemeRate       Float?  @map("scheme_rate")
+  schemePaidAmount Float?  @map("scheme_paid_amount")
+  memberLiability  Float?  @map("member_liability")
+
+  claim              Claim                @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  billItem           BillItem?            @relation(fields: [billItemId], references: [id])
+  itemType           ItemType             @relation(fields: [itemTypeId], references: [id])
+  codingSet          CodingSet            @relation(fields: [codingSetId], references: [id])
+  nappiCode          NappiCode?           @relation(fields: [nappiCodeId], references: [id])
+  tariffCode         TariffCode?          @relation(fields: [tariffCodeId], references: [id])
+  modifiers          ClaimItemModifier[]
+  diagnoses          ClaimItemDiagnosis[]
+  clinicalDetails    ClinicalDetail[]
+  benefitTypes       ClaimItemBenefit[]
+  itemFinancial      ItemFinancial?
+  additionalBhfInfos AdditionalBhfInfo[]
+  assistants         Assistant[]
+  treatmentDetails   TreatmentDetail[]
+  refillDetails      RefillDetail[]
+  dentalDetails      DentalDetail[]
+  dentalLabDetails   DentalLabDetail[]
+  optometryDetails   OptometryDetail[]
+
+  @@index([claimId])
+  @@map("claim_items")
+}
+
+model ClaimItemModifier {
+  id             String @id @default(cuid())
+  claimItemId    String @map("claim_item_id")
+  modifierCodeId String @map("modifier_code_id")
+  value          Float? // Applied value
+
+  claimItem    ClaimItem    @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  modifierCode ModifierCode @relation(fields: [modifierCodeId], references: [id])
+
+  @@unique([claimItemId, modifierCodeId])
+  @@map("claim_item_modifiers")
+}
+
+model ClaimItemDiagnosis {
+  id          String @id @default(cuid())
+  claimItemId String @map("claim_item_id")
+  icdCodeId   String @map("icd_code_id")
+  stageInd    String @map("stage_ind") // 01=Primary, 02=Other
+
+  claimItem ClaimItem @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  icdCode   Icd10Code @relation(fields: [icdCodeId], references: [id])
+
+  @@unique([claimItemId, icdCodeId])
+  @@map("claim_item_diagnoses")
+}
+
+model ClaimItemBenefit {
+  id            String @id @default(cuid())
+  claimItemId   String @map("claim_item_id")
+  benefitTypeId String @map("benefit_type_id")
+
+  claimItem   ClaimItem   @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  benefitType BenefitType @relation(fields: [benefitTypeId], references: [id])
+
+  @@unique([claimItemId, benefitTypeId])
+  @@map("claim_item_benefits")
+}
+
+model ClaimSchemeDetail {
+  id             String   @id @default(cuid())
+  claimId        String   @unique @map("claim_id")
+  schemeOptionId String   @map("scheme_option_id")
+  memberNumber   String   @map("member_number")
+  dependantCode  String   @map("dependant_code")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  claim        Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  schemeOption SchemeOption @relation(fields: [schemeOptionId], references: [id])
+
+  @@map("claim_scheme_details")
+}
+
+model ClaimPatient {
+  id            String   @id @default(cuid())
+  claimId       String   @unique @map("claim_id")
+  patientId     String   @map("patient_id")
+  initials      String
+  firstName     String?  @map("first_name")
+  lastName      String   @map("last_name")
+  dateOfBirth   DateTime @map("date_of_birth")
+  dependantCode String   @map("dependant_code")
+  gender        String
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  claim   Claim   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@map("claim_patients")
+}
+
+model ClaimFinancial {
+  id                   String   @id @default(cuid())
+  claimId              String   @unique @map("claim_id")
+  submittedGross       Float    @map("submitted_gross")
+  submittedDiscount    Float    @map("submitted_discount")
+  submittedClaimAmount Float    @map("submitted_claim_amount")
+  copyFee              Float?   @map("copy_fee")
+  lateFee              Float?   @map("late_fee")
+  excessTimeFee        Float?   @map("excess_time_fee")
+  dispensingFee        Float?   @map("dispensing_fee")
+  serviceFee           Float?   @map("service_fee")
+  eligibilityAmount    Float?   @map("eligibility_amount")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  claim                    Claim                   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  pricingTariffIndicator   PricingTariffIndicator? @relation(fields: [pricingTariffIndicatorId], references: [id])
+  pricingTariffIndicatorId String?
+
+  @@map("claim_financials")
+}
+
+model ItemFinancial {
+  id                 String   @id @default(cuid())
+  claimItemId        String   @unique @map("claim_item_id")
+  pricingTariffIndId String?  @map("pricing_tariff_ind_id") // tar_ind
+  price              Float
+  basisOfCost        String?  @map("basis_of_cost") // bs_of_cst: 3=default, 8=CAP Nappi, 9=Non-Cap Nappi
+  submittedDiscount  Float?   @map("submitted_discount")
+  copay              Float?   @map("copay")
+  containerFee       Float?   @map("container_fee") // cont_fee
+  dispensingFee      Float?   @map("dispensing_fee") // disp_fee
+  serviceFee         Float?   @map("service_fee") // serv_fee
+  gross              Float
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  claimItem        ClaimItem               @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  pricingTariffInd PricingTariffIndicator? @relation(fields: [pricingTariffIndId], references: [id])
+
+  @@map("item_financials")
+}
+
+// ==================== ERA (Electronic Remittance Advice) MODELS ====================
+
+model Era {
+  id             String   @id @default(cuid())
+  eraNumber      String   @unique @map("era_number")
+  eraDate        DateTime @map("era_date")
+  practiceId     String   @map("practice_id")
+  fileSequenceNo Int      @map("file_sequence_no")
+  fileLayoutVer  String   @map("file_layout_ver") // "1.1" or "1.2"
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  practice     Practice      @relation(fields: [practiceId], references: [id])
+  schemeEras   SchemeEra[]
+  eraFile      EraFile?
+  eraProviders EraProvider[]
+
+  @@index([eraNumber])
+  @@index([practiceId])
+  @@map("eras")
+}
+
+model EraFile {
+  id          String   @id @default(cuid())
+  eraId       String   @unique @map("era_id")
+  fileName    String   @map("file_name")
+  fileContent String?  @map("file_content") @db.LongText // For pipe-delimited
+  fileXml     String?  @map("file_xml") @db.LongText // For XML
+  fileFormat  String   @map("file_format") // PIPE, XML
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  era Era @relation(fields: [eraId], references: [id], onDelete: Cascade)
+
+  @@map("era_files")
+}
+
+model SchemeEra {
+  id                   String    @id @default(cuid())
+  eraId                String    @map("era_id")
+  administratorName    String    @map("administrator_name")
+  administratorCode    String?   @map("administrator_code")
+  schemeName           String    @map("scheme_name")
+  schemeCode           String?   @map("scheme_code")
+  schemeEraNumber      String    @map("scheme_era_number")
+  schemeEraDate        DateTime  @map("scheme_era_date")
+  schemeEraType        String?   @map("scheme_era_type") // E=All, P=Partial
+  totalPaidProvider    Float     @map("total_paid_provider")
+  totalPaidMember      Float?    @map("total_paid_member")
+  totalNotPaid         Float?    @map("total_not_paid")
+  totalMemberLiability Float?    @map("total_member_liability")
+  acbChequeAmount      Float?    @map("acb_cheque_amount")
+  schemePaidDate       DateTime? @map("scheme_paid_date")
+  schemePaidRef        String?   @map("scheme_paid_ref")
+  schemeMessage        String?   @map("scheme_message") @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  era            Era             @relation(fields: [eraId], references: [id], onDelete: Cascade)
+  eraBank        EraBank?
+  eraBalance     EraBalance?
+  eraClaims      EraClaim[]
+  eraAdjustments EraAdjustment[]
+
+  @@index([eraId])
+  @@map("scheme_eras")
+}
+
+model EraBank {
+  id            String   @id @default(cuid())
+  schemeEraId   String   @unique @map("scheme_era_id")
+  bankName      String?  @map("bank_name")
+  branchCode    String?  @map("branch_code")
+  accountHolder String?  @map("account_holder")
+  accountNumber String?  @map("account_number")
+  accountType   String?  @map("account_type")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  schemeEra SchemeEra @relation(fields: [schemeEraId], references: [id], onDelete: Cascade)
+
+  @@map("era_banks")
+}
+
+model EraBalance {
+  id             String   @id @default(cuid())
+  schemeEraId    String   @unique @map("scheme_era_id")
+  openingBalance Float?   @map("opening_balance")
+  closingBalance Float?   @map("closing_balance")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  schemeEra SchemeEra @relation(fields: [schemeEraId], references: [id], onDelete: Cascade)
+
+  @@map("era_balances")
+}
+
+model EraClaim {
+  id                 String   @id @default(cuid())
+  schemeEraId        String   @map("scheme_era_id")
+  claimId            String?  @map("claim_id")
+  providerClaimNo    String?  @map("provider_claim_no")
+  schemeClaimNo      String?  @map("scheme_claim_no")
+  treatmentDate      DateTime @map("treatment_date")
+  providerRefNo      String   @map("provider_ref_no")
+  claimStatus        String?  @map("claim_status")
+  providerBhfNo      String   @map("provider_bhf_no")
+  providerName       String?  @map("provider_name")
+  providerGroup      String?  @map("provider_group")
+  switchHouseName    String?  @map("switch_house_name")
+  switchClaimId      String?  @map("switch_claim_id")
+  memberNumber       String   @map("member_number")
+  mainMemberInitials String?  @map("main_member_initials")
+  mainMemberName     String?  @map("main_member_name")
+  mainMemberSurname  String?  @map("main_member_surname")
+  oldMemberNumber    String?  @map("old_member_number")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  schemeEra          SchemeEra           @relation(fields: [schemeEraId], references: [id], onDelete: Cascade)
+  claim              Claim?              @relation(fields: [claimId], references: [id])
+  eraClaimPatient    EraClaimPatient?
+  eraClaimFinancial  EraClaimFinancial?
+  eraClaimLines      EraClaimLine[]
+  eraClaimDeductions EraClaimDeduction[]
+  eraClaimMessages   EraClaimMessage[]
+
+  @@index([schemeEraId])
+  @@index([claimId])
+  @@map("era_claims")
+}
+
+model EraClaimPatient {
+  id            String    @id @default(cuid())
+  eraClaimId    String    @unique @map("era_claim_id")
+  patientId     String?   @map("patient_id")
+  initials      String?   @map("initials")
+  firstName     String?   @map("first_name")
+  surname       String?   @map("surname")
+  dateOfBirth   DateTime? @map("date_of_birth")
+  dependantCode String?   @map("dependant_code")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  eraClaim EraClaim @relation(fields: [eraClaimId], references: [id], onDelete: Cascade)
+  patient  Patient? @relation(fields: [patientId], references: [id])
+
+  @@map("era_claim_patients")
+}
+
+model EraClaimFinancial {
+  id                    String   @id @default(cuid())
+  eraClaimId            String   @unique @map("era_claim_id")
+  providerClaimedAmt    Float    @map("provider_claimed_amt")
+  switchClaimedAmt      Float?   @map("switch_claimed_amt")
+  schemePaidToProvider  Float    @map("scheme_paid_to_provider")
+  schemePaidToMember    Float?   @map("scheme_paid_to_member")
+  schemeMemberToPay     Float?   @map("scheme_member_to_pay")
+  schemeNonPaid         Float?   @map("scheme_non_paid")
+  schemeTotalDeductions Float?   @map("scheme_total_deductions")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  eraClaim EraClaim @relation(fields: [eraClaimId], references: [id], onDelete: Cascade)
+
+  @@map("era_claim_financials")
+}
+
+model EraClaimLine {
+  id                     String   @id @default(cuid())
+  eraClaimId             String   @map("era_claim_id")
+  lineNumber             Int      @map("line_number")
+  dateOfService          DateTime @map("date_of_service")
+  renderingProviderBhfNo String?  @map("rendering_provider_bhf_no")
+  renderingProviderName  String?  @map("rendering_provider_name")
+  procedureCode          String?  @map("procedure_code")
+  productCode            String?  @map("product_code")
+  productCodeSuffix      String?  @map("product_code_suffix")
+  billingPracticeLineNo  String?  @map("billing_practice_line_no")
+  schemeLineNo           String?  @map("scheme_line_no")
+  switchLineNo           String?  @map("switch_line_no")
+  schemeRefNo            String?  @map("scheme_ref_no")
+  lineStatus             String?  @map("line_status")
+  labNumber              String?  @map("lab_number")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  eraClaim          EraClaim           @relation(fields: [eraClaimId], references: [id], onDelete: Cascade)
+  eraLinePatient    EraLinePatient?
+  eraLineFinancial  EraLineFinancial?
+  eraLineModifiers  EraLineModifier[]
+  eraLineDeductions EraLineDeduction[]
+  eraLineMessages   EraLineMessage[]
+
+  @@index([eraClaimId])
+  @@map("era_claim_lines")
+}
+
+model EraLinePatient {
+  id            String    @id @default(cuid())
+  eraLineId     String    @unique @map("era_line_id")
+  patientId     String?   @map("patient_id")
+  initials      String?   @map("initials")
+  firstName     String?   @map("first_name")
+  surname       String?   @map("surname")
+  dateOfBirth   DateTime? @map("date_of_birth")
+  dependantCode String?   @map("dependant_code")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  eraLine EraClaimLine @relation(fields: [eraLineId], references: [id], onDelete: Cascade)
+  patient Patient?     @relation(fields: [patientId], references: [id])
+
+  @@map("era_line_patients")
+}
+
+model EraLineFinancial {
+  id                    String   @id @default(cuid())
+  eraLineId             String   @unique @map("era_line_id")
+  billingPracticeAmt    Float    @map("billing_practice_amt")
+  switchClaimedAmt      Float?   @map("switch_claimed_amt")
+  schemeRate            Float?   @map("scheme_rate")
+  schemePaidToProvider  Float    @map("scheme_paid_to_provider")
+  schemePaidToMember    Float?   @map("scheme_paid_to_member")
+  schemeMemberToPay     Float?   @map("scheme_member_to_pay")
+  schemeNonPaid         Float?   @map("scheme_non_paid")
+  schemeTotalDeductions Float?   @map("scheme_total_deductions")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  eraLine EraClaimLine @relation(fields: [eraLineId], references: [id], onDelete: Cascade)
+
+  @@map("era_line_financials")
+}
+
+model EraLineModifier {
+  id           String   @id @default(cuid())
+  eraLineId    String   @map("era_line_id")
+  modifierCode String   @map("modifier_code")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  eraLine EraClaimLine @relation(fields: [eraLineId], references: [id], onDelete: Cascade)
+
+  @@map("era_line_modifiers")
+}
+
+model EraClaimDeduction {
+  id              String   @id @default(cuid())
+  eraClaimId      String   @map("era_claim_id")
+  deductionTypeId String   @map("deduction_type_id")
+  amount          Float
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  eraClaim      EraClaim      @relation(fields: [eraClaimId], references: [id], onDelete: Cascade)
+  deductionType DeductionType @relation(fields: [deductionTypeId], references: [id])
+
+  @@map("era_claim_deductions")
+}
+
+model EraLineDeduction {
+  id              String   @id @default(cuid())
+  eraLineId       String   @map("era_line_id")
+  deductionTypeId String   @map("deduction_type_id")
+  amount          Float
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  eraLine       EraClaimLine  @relation(fields: [eraLineId], references: [id], onDelete: Cascade)
+  deductionType DeductionType @relation(fields: [deductionTypeId], references: [id])
+
+  @@map("era_line_deductions")
+}
+
+model EraClaimMessage {
+  id         String   @id @default(cuid())
+  eraClaimId String   @map("era_claim_id")
+  reasonType String?  @map("reason_type") // Rejection, Warning, Information
+  reasonCode String?  @map("reason_code")
+  reasonDesc String   @map("reason_desc") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  eraClaim EraClaim @relation(fields: [eraClaimId], references: [id], onDelete: Cascade)
+
+  @@map("era_claim_messages")
+}
+
+model EraLineMessage {
+  id         String   @id @default(cuid())
+  eraLineId  String   @map("era_line_id")
+  reasonType String?  @map("reason_type")
+  reasonCode String?  @map("reason_code")
+  reasonDesc String   @map("reason_desc") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  eraLine EraClaimLine @relation(fields: [eraLineId], references: [id], onDelete: Cascade)
+
+  @@map("era_line_messages")
+}
+
+model EraAdjustment {
+  id             String   @id @default(cuid())
+  schemeEraId    String   @map("scheme_era_id")
+  adjustmentRef  String?  @map("adjustment_ref")
+  adjustmentDate DateTime @map("adjustment_date")
+  adjustmentAmt  Float    @map("adjustment_amt")
+  adjustmentDesc String   @map("adjustment_desc") @db.Text
+  reasonType     String?  @map("reason_type")
+  reasonCode     String?  @map("reason_code")
+  reasonDesc     String?  @map("reason_desc") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  schemeEra SchemeEra @relation(fields: [schemeEraId], references: [id], onDelete: Cascade)
+
+  @@map("era_adjustments")
+}
+
+// ==================== DOCTOR DETAILS (BHF, HPC, etc.) ====================
+
+model DoctorDetail {
+  id                   String   @id @default(cuid())
+  doctorId             String   @map("doctor_id")
+  claimId              String?  @map("claim_id")
+  eventNumber          String?  @map("event_number") // Pathology encounter number
+  encounterNumber      String?  @map("encounter_number")
+  authNumber           String?  @map("auth_number") // Pre-authorisation number
+  memberAccountNumber  String?  @map("member_account_number")
+  referralTrackingNo   String?  @map("referral_tracking_no")
+  placeOfServiceCodeId String?  @map("place_of_service_code_id")
+  disposalCodeId       String?  @map("disposal_code_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  doctor             Doctor              @relation(fields: [doctorId], references: [id])
+  claim              Claim?              @relation(fields: [claimId], references: [id])
+  placeOfServiceCode PlaceOfServiceCode? @relation(fields: [placeOfServiceCodeId], references: [id])
+  disposalCode       DisposalCode?       @relation(fields: [disposalCodeId], references: [id])
+
+  @@index([doctorId])
+  @@index([claimId])
+  @@map("doctor_details")
+}
+
+// BHF Details (Prescribing, Referring, Admitting Doctors)
+model BhfDetail {
+  id            String   @id @default(cuid())
+  claimId       String   @map("claim_id")
+  prescribingId String?  @map("prescribing_id") // Doctor ID for prescribing
+  referringId   String?  @map("referring_id") // Doctor ID for referring
+  admittingId   String?  @map("admitting_id") // Doctor ID for admitting
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  claim       Claim       @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  prescribing Doctor?     @relation("PrescribingDoctor", fields: [prescribingId], references: [id])
+  referring   Doctor?     @relation("ReferringDoctor", fields: [referringId], references: [id])
+  admitting   Doctor?     @relation("AdmittingDoctor", fields: [admittingId], references: [id])
+  hpcDetails  HpcDetail[]
+  doctor      Doctor?     @relation(fields: [doctorId], references: [id])
+  doctorId    String?
+
+  @@map("bhf_details")
+}
+
+// HPC Details (HPCSA numbers)
+model HpcDetail {
+  id             String   @id @default(cuid())
+  bhfDetailId    String   @map("bhf_detail_id")
+  prescribingHpc String?  @map("prescribing_hpc")
+  referringHpc   String?  @map("referring_hpc")
+  admittingHpc   String?  @map("admitting_hpc")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  bhfDetail BhfDetail @relation(fields: [bhfDetailId], references: [id], onDelete: Cascade)
+
+  @@map("hpc_details")
+}
+
+// Additional BHF Info (Attending, Anaesthetist, Assistant)
+model AdditionalBhfInfo {
+  id            String   @id @default(cuid())
+  claimItemId   String   @map("claim_item_id")
+  typeIndicator String   @map("type_indicator") // 1=Attending, 2=Anaesthetist, 3=Assistant
+  bhfNumber     String   @map("bhf_number")
+  hpcNumber     String?  @map("hpc_number")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  claimItem ClaimItem @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+
+  @@map("additional_bhf_infos")
+}
+
+// Assistant details (for procedures)
+model Assistant {
+  id            String   @id @default(cuid())
+  claimItemId   String   @map("claim_item_id")
+  doctorId      String   @map("doctor_id") // Assistant doctor
+  councilTypeId String?  @map("council_type_id")
+  councilRegNo  String?  @map("council_reg_no")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  claimItem   ClaimItem    @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  doctor      Doctor       @relation(fields: [doctorId], references: [id])
+  councilType CouncilType? @relation(fields: [councilTypeId], references: [id])
+
+  @@map("assistants")
+}
+
+// ==================== OTHER CLAIM-RELATED MODELS ====================
+
+model OtherDetail {
+  id             String    @id @default(cuid())
+  claimId        String    @map("claim_id")
+  wcaNumber      String?   @map("wca_number") // Workmen's Compensation Act Number
+  insuranceRefNo String?   @map("insurance_ref_no") // Employer name for WCA
+  accidentDate   DateTime? @map("accident_date")
+  preIssuedTxNo  String?   @map("pre_issued_tx_no")
+  pinBlock       String?   @map("pin_block")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  claim Claim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@map("other_details")
+}
+
+model TreatmentDetail {
+  id          String   @id @default(cuid())
+  claimItemId String   @map("claim_item_id")
+  startDate   DateTime @map("start_date")
+  startTime   String?  @map("start_time")
+  endDate     DateTime @map("end_date")
+  endTime     String?  @map("end_time")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimItem ClaimItem @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+
+  @@map("treatment_details")
+}
+
+// Refill details for medicine items
+model RefillDetail {
+  id               String   @id @default(cuid())
+  claimItemId      String   @map("claim_item_id")
+  refillCode       String   @map("refill_code") // 00=original, 01=first repeat, etc.
+  numberOfRefills  Int?     @map("number_of_refills")
+  refillAuthorised String?  @map("refill_authorised") // D=doctor
+  originalRxNumber String?  @map("original_rx_number")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  claimItem ClaimItem @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+
+  @@map("refill_details")
+}
+
+// ==================== DENTAL CLAIM MODELS ====================
+
+model DentalDetail {
+  id            String   @id @default(cuid())
+  claimItemId   String   @map("claim_item_id")
+  numberOfTeeth Int?     @map("number_of_teeth")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  claimItem ClaimItem     @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  teeth     DentalTooth[]
+
+  @@map("dental_details")
+}
+
+model DentalTooth {
+  id             String   @id @default(cuid())
+  dentalDetailId String   @map("dental_detail_id")
+  toothNumber    String   @map("tooth_number") // e.g., "11", "23S" for super-numerary
+  surface        String? // e.g., "B", "D", "L", "M", "O", "P"
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  dentalDetail DentalDetail @relation(fields: [dentalDetailId], references: [id], onDelete: Cascade)
+
+  @@map("dental_teeth")
+}
+
+model DentalLabDetail {
+  id              String   @id @default(cuid())
+  claimItemId     String   @map("claim_item_id")
+  dentalRegNumber String   @map("dental_reg_number")
+  councilTypeId   String   @map("council_type_id") // Should be 04=SADTC
+  labReferenceNo  String?  @map("lab_reference_no")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  claimItem   ClaimItem   @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  councilType CouncilType @relation(fields: [councilTypeId], references: [id])
+
+  @@map("dental_lab_details")
+}
+
+// ==================== OPTOMETRY CLAIM MODELS ====================
+
+model OptometryDetail {
+  id          String   @id @default(cuid())
+  claimItemId String   @map("claim_item_id")
+  eye         String // L=Left, R=Right
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  claimItem ClaimItem       @relation(fields: [claimItemId], references: [id], onDelete: Cascade)
+  exam      OptometryExam?
+  lens      OptometryLens?
+  frame     OptometryFrame?
+
+  @@map("optometry_details")
+}
+
+model OptometryExam {
+  id                  String   @id @default(cuid())
+  optometryDetailId   String   @unique @map("optometry_detail_id")
+  visualAcuity        String?  @map("visual_acuity") // e.g., "12/34+5"
+  visualFields        String?  @map("visual_fields") @db.Text
+  intraOcularPressure String?  @map("intra_ocular_pressure") // e.g., "12.34"
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  optometryDetail OptometryDetail @relation(fields: [optometryDetailId], references: [id], onDelete: Cascade)
+
+  @@map("optometry_exams")
+}
+
+model OptometryLens {
+  id                String   @id @default(cuid())
+  optometryDetailId String   @unique @map("optometry_detail_id")
+  sphere            String? // e.g., "10.00"
+  cylinder          String? // e.g., "10.00"
+  axis              String? // e.g., "10.00"
+  readAdd           String?  @map("read_add") // Reading addition
+  prism             String? // e.g., "10.00"
+  base              String? // e.g., "OD" (Out and Down)
+  conditionDesc     String?  @map("condition_desc")
+  diameter          String? // Lens diameter
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  optometryDetail OptometryDetail @relation(fields: [optometryDetailId], references: [id], onDelete: Cascade)
+
+  @@map("optometry_lenses")
+}
+
+model OptometryFrame {
+  id                String   @id @default(cuid())
+  optometryDetailId String   @unique @map("optometry_detail_id")
+  nvsTagNumber      String?  @map("nvs_tag_number")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  optometryDetail OptometryDetail @relation(fields: [optometryDetailId], references: [id], onDelete: Cascade)
+
+  @@map("optometry_frames")
+}
+
+// ==================== STOCK MANAGEMENT MODELS ====================
+
+model Supplier {
+  id             String   @id @default(cuid())
+  supplierCode   String   @unique @map("supplier_code")
+  name           String
+  contactPerson  String?  @map("contact_person")
+  email          String?
+  phone          String?
+  address        String?  @db.Text
+  vatNumber      String?  @map("vat_number")
+  registrationNo String?  @map("registration_no")
+  paymentTerms   String?  @map("payment_terms")
+  leadTimeDays   Int?     @map("lead_time_days")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  products       ProductSupplier[]
+  purchaseOrders PurchaseOrder[]
+  stockBatches   StockBatch[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id                     String   @id @default(cuid())
+  productCode            String   @unique @map("product_code")
+  nappiCodeId            String?  @unique @map("nappi_code_id")
+  name                   String
+  genericName            String?  @map("generic_name")
+  category               String // MEDICINE, CONSUMABLE, EQUIPMENT, RADIOLOGY
+  type                   String // TABLET, CAPSULE, SYRUP, INJECTION, DRESSING, etc.
+  unitOfMeasure          String   @map("unit_of_measure")
+  packSize               Int      @default(1) @map("pack_size")
+  dispensingUnit         String   @map("dispensing_unit")
+  purchasePrice          Float?   @map("purchase_price")
+  sellingPriceGeneral    Float?   @map("selling_price_general")
+  sellingPriceWorker     Float?   @map("selling_price_worker")
+  dispensingFee          Float?   @map("dispensing_fee")
+  vatPercentage          Float    @default(15.0) @map("vat_percentage")
+  reorderLevel           Int?     @map("reorder_level")
+  reorderQuantity        Int?     @map("reorder_quantity")
+  maxStockLevel          Int?     @map("max_stock_level")
+  leadTimeDays           Int?     @map("lead_time_days")
+  drugSchedule           String?  @map("drug_schedule")
+  atcCode                String?  @map("atc_code")
+  isPrescriptionRequired Boolean  @default(true) @map("is_prescription_required")
+  isControlled           Boolean  @default(false) @map("is_controlled")
+  isChronic              Boolean  @default(false) @map("is_chronic")
+  isCdl                  Boolean  @default(false) @map("is_cdl")
+  isActive               Boolean  @default(true) @map("is_active")
+  batchTracked           Boolean  @default(true) @map("batch_tracked")
+  expiryTracked          Boolean  @default(true) @map("expiry_tracked")
+  imageUrl               String?  @map("image_url")
+  description            String?  @db.Text
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  nappiCode            NappiCode?             @relation(fields: [nappiCodeId], references: [id])
+  suppliers            ProductSupplier[]
+  stockBatches         StockBatch[]
+  purchaseOrderItems   PurchaseOrderItem[]
+  prescriptionItems    PrescriptionItem[]
+  consumptionItems     StockConsumptionItem[]
+  goodsReceiptItems    GoodsReceiptItem[]
+  stockTransferItems   StockTransferItem[]
+  stockAdjustments     StockAdjustment[]
+  stockReorderRequests StockReorderRequest[]
+
+  @@index([productCode])
+  @@index([category])
+  @@map("products")
+}
+
+model ProductSupplier {
+  id                String  @id @default(cuid())
+  productId         String  @map("product_id")
+  supplierId        String  @map("supplier_id")
+  supplierCode      String? @map("supplier_code")
+  isPrimary         Boolean @default(false) @map("is_primary")
+  lastPurchasePrice Float?  @map("last_purchase_price")
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, supplierId])
+  @@map("product_suppliers")
+}
+
+model StockBatch {
+  id                  String    @id @default(cuid())
+  batchNumber         String    @map("batch_number")
+  productId           String    @map("product_id")
+  supplierId          String?   @map("supplier_id")
+  purchaseOrderId     String?   @map("purchase_order_id")
+  quantityReceived    Int       @map("quantity_received")
+  quantityRemaining   Int       @map("quantity_remaining")
+  quantityReserved    Int       @default(0) @map("quantity_reserved")
+  costPricePerUnit    Float     @map("cost_price_per_unit")
+  sellingPriceGeneral Float     @map("selling_price_general")
+  manufacturingDate   DateTime? @map("manufacturing_date")
+  expiryDate          DateTime? @map("expiry_date")
+  receivedDate        DateTime  @default(now()) @map("received_date")
+  status              String    @default("ACTIVE") // ACTIVE, EXPIRED, DEPLETED, QUARANTINED
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  product            Product                @relation(fields: [productId], references: [id])
+  supplier           Supplier?              @relation(fields: [supplierId], references: [id])
+  purchaseOrder      PurchaseOrder?         @relation(fields: [purchaseOrderId], references: [id])
+  consumptionItems   StockConsumptionItem[]
+  reservations       StockReservation[]
+  stockTransferItems StockTransferItem[]
+  stockAdjustments   StockAdjustment[]
+  nappiCode          NappiCode?             @relation(fields: [nappiCodeId], references: [id])
+  nappiCodeId        String?
+
+  @@index([productId])
+  @@index([batchNumber])
+  @@index([expiryDate])
+  @@map("stock_batches")
+}
+
+model StockReservation {
+  id             String   @id @default(cuid())
+  batchId        String   @map("batch_id")
+  prescriptionId String?  @map("prescription_id")
+  appointmentId  String?  @map("appointment_id")
+  quantity       Int
+  reservedAt     DateTime @default(now()) @map("reserved_at")
+  expiresAt      DateTime @map("expires_at")
+  status         String   @default("ACTIVE") // ACTIVE, CONSUMED, CANCELLED, EXPIRED
+
+  batch StockBatch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId])
+  @@index([prescriptionId])
+  @@map("stock_reservations")
+}
+
+model StockConsumptionItem {
+  id             String   @id @default(cuid())
+  batchId        String   @map("batch_id")
+  prescriptionId String?  @map("prescription_id")
+  appointmentId  String?  @map("appointment_id")
+  doctorId       String?  @map("doctor_id")
+  departmentId   String?  @map("department_id")
+  quantity       Int
+  unitPrice      Float    @map("unit_price")
+  totalAmount    Float    @map("total_amount")
+  consumedBy     String?  @map("consumed_by")
+  consumedAt     DateTime @default(now()) @map("consumed_at")
+  notes          String?  @db.Text
+
+  batch     StockBatch @relation(fields: [batchId], references: [id])
+  productId String?
+  product   Product?   @relation(fields: [productId], references: [id])
+
+  @@index([batchId])
+  @@index([prescriptionId])
+  @@index([appointmentId])
+  @@map("stock_consumption")
+}
+
+model PurchaseOrder {
+  id           String    @id @default(cuid())
+  poNumber     String    @unique @map("po_number")
+  supplierId   String    @map("supplier_id")
+  orderDate    DateTime  @default(now()) @map("order_date")
+  expectedDate DateTime? @map("expected_date")
+  deliveryDate DateTime? @map("delivery_date")
+  status       String    @default("DRAFT") // DRAFT, SUBMITTED, RECEIVED, CANCELLED
+  totalAmount  Float?    @map("total_amount")
+  vatAmount    Float?    @map("vat_amount")
+  grandTotal   Float?    @map("grand_total")
+  notes        String?   @db.Text
+  createdBy    String?   @map("created_by")
+  approvedBy   String?   @map("approved_by")
+  approvedAt   DateTime? @map("approved_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  supplier     Supplier            @relation(fields: [supplierId], references: [id])
+  items        PurchaseOrderItem[]
+  grnReceipts  GoodsReceiptNote[]
+  stockBatches StockBatch[]
+
+  @@index([poNumber])
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String @id @default(cuid())
+  poId             String @map("po_id")
+  productId        String @map("product_id")
+  quantity         Int
+  unitPrice        Float  @map("unit_price")
+  totalPrice       Float  @map("total_price")
+  receivedQuantity Int    @default(0) @map("received_quantity")
+
+  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+model GoodsReceiptNote {
+  id           String   @id @default(cuid())
+  grnNumber    String   @unique @map("grn_number")
+  poId         String?  @map("po_id")
+  receivedDate DateTime @default(now()) @map("received_date")
+  receivedBy   String?  @map("received_by")
+  status       String   @default("DRAFT") // DRAFT, COMPLETED
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder?     @relation(fields: [poId], references: [id])
+  items         GoodsReceiptItem[]
+
+  @@index([grnNumber])
+  @@map("goods_receipt_notes")
+}
+
+model GoodsReceiptItem {
+  id                String    @id @default(cuid())
+  grnId             String    @map("grn_id")
+  productId         String    @map("product_id")
+  poItemId          String?   @map("po_item_id")
+  batchNumber       String    @map("batch_number")
+  quantityReceived  Int       @map("quantity_received")
+  quantityAccepted  Int       @map("quantity_accepted")
+  quantityRejected  Int       @default(0) @map("quantity_rejected")
+  rejectReason      String?   @map("reject_reason")
+  manufacturingDate DateTime? @map("manufacturing_date")
+  expiryDate        DateTime? @map("expiry_date")
+  costPricePerUnit  Float     @map("cost_price_per_unit")
+
+  goodsReceipt GoodsReceiptNote @relation(fields: [grnId], references: [id])
+  product      Product          @relation(fields: [productId], references: [id])
+
+  @@map("goods_receipt_items")
+}
+
+model StockTransfer {
+  id             String   @id @default(cuid())
+  transferNumber String   @unique @map("transfer_number")
+  fromDepartment String?  @map("from_department")
+  toDepartment   String?  @map("to_department")
+  fromDoctorId   String?  @map("from_doctor_id")
+  toDoctorId     String?  @map("to_doctor_id")
+  transferDate   DateTime @default(now()) @map("transfer_date")
+  status         String   @default("PENDING") // PENDING, COMPLETED, CANCELLED
+  requestedBy    String?  @map("requested_by")
+  approvedBy     String?  @map("approved_by")
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  items StockTransferItem[]
+
+  @@index([transferNumber])
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id         String @id @default(cuid())
+  transferId String @map("transfer_id")
+  batchId    String @map("batch_id")
+  productId  String @map("product_id")
+  quantity   Int
+
+  transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  batch    StockBatch    @relation(fields: [batchId], references: [id])
+  product  Product       @relation(fields: [productId], references: [id])
+
+  @@map("stock_transfer_items")
+}
+
+model StockAdjustment {
+  id               String   @id @default(cuid())
+  adjustmentNumber String   @unique @map("adjustment_number")
+  batchId          String   @map("batch_id")
+  productId        String   @map("product_id")
+  adjustmentType   String   @map("adjustment_type") // WASTAGE, EXPIRED, DAMAGED, COUNT_CORRECTION, RETURN
+  quantity         Int // Positive for increase, negative for decrease
+  reason           String   @db.Text
+  adjustedBy       String?  @map("adjusted_by")
+  approvedBy       String?  @map("approved_by")
+  adjustedAt       DateTime @default(now()) @map("adjusted_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  batch   StockBatch @relation(fields: [batchId], references: [id])
+  product Product    @relation(fields: [productId], references: [id])
+
+  @@index([batchId])
+  @@map("stock_adjustments")
+}
+
+model StockReorderRequest {
+  id              String    @id @default(cuid())
+  productId       String    @map("product_id")
+  currentStock    Int       @map("current_stock")
+  reorderLevel    Int       @map("reorder_level")
+  reorderQuantity Int       @map("reorder_quantity")
+  status          String    @default("PENDING") // PENDING, APPROVED, ORDERED, CANCELLED
+  requestedAt     DateTime  @default(now()) @map("requested_at")
+  processedAt     DateTime? @map("processed_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@index([status])
+  @@map("stock_reorder_requests")
+}
+
+// ==================== AI & OTHER MODELS ====================
+
+model AiConsultationSummary {
+  id              String   @id @default(cuid())
+  appointmentId   String   @unique @map("appointment_id")
+  summary         String   @db.LongText
+  keyFindings     Json?    @map("key_findings")
+  recommendations Json?    @map("recommendations")
+  prescriptions   Json?    @map("prescriptions")
+  diagnoses       Json?    @map("diagnoses")
+  confidence      Float?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@map("ai_consultation_summaries")
+}
+
+model Invite {
+  id              String   @id @default(cuid())
+  token           String   @unique
+  email           String
+  firstName       String?  @map("first_name")
+  lastName        String?  @map("last_name")
+  phone           String?
+  patientId       String?  @map("patient_id")
+  doctorId        String   @map("doctor_id")
+  appointmentDate DateTime @map("appointment_date")
+  appointmentSlot String   @map("appointment_slot")
+  status          String   @default("PENDING")
+  expiresAt       DateTime @map("expires_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([token])
+  @@index([status])
+  @@map("invites")
+}
+
+// ==================== AUDIT LOG MODEL ====================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  userType   String?  @map("user_type") // DOCTOR, STAFF, PATIENT, ADMIN
+  action     String // CREATE, UPDATE, DELETE, VIEW, SUBMIT, REVERSE
+  entityType String   @map("entity_type") // Patient, Claim, Bill, Appointment, etc.
+  entityId   String   @map("entity_id")
+  oldValues  Json?    @map("old_values")
+  newValues  Json?    @map("new_values")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ==================== ERA PROVIDER MODEL ====================
+
+model EraProvider {
+  id             String   @id @default(cuid())
+  eraId          String   @map("era_id")
+  doctorId       String   @map("doctor_id")
+  providerNumber String   @map("provider_number") // BHF number
+  providerName   String   @map("provider_name")
+  providerGroup  String?  @map("provider_group")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  era    Era    @relation(fields: [eraId], references: [id], onDelete: Cascade)
+  doctor Doctor @relation(fields: [doctorId], references: [id])
+
+  @@unique([eraId, doctorId])
+  @@map("era_providers")
+}
