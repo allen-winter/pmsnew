@@ -92,11 +92,7 @@ const navItems: NavItem[] = [
     name: "Practice Management",
     href: "/practices",
     icon: Building2,
-    subItems: [
-      { name: "Practices", href: "/practices", icon: Building2 },
-      { name: "Locations", href: "/practices/locations", icon: MapPin },
-      { name: "Contracts", href: "/practices/contracts", icon: FileCheck },
-    ],
+    subItems: [{ name: "Practices", href: "/practices", icon: Building2 }],
   },
   {
     name: "Clinical",
@@ -131,7 +127,11 @@ const navItems: NavItem[] = [
       { name: "Products", href: "/stock/products", icon: Pill },
       { name: "Batches", href: "/stock/batches", icon: Package },
       { name: "Suppliers", href: "/stock/suppliers", icon: Truck },
-      { name: "Purchase Orders", href: "/stock/purchase-orders", icon: FileText },
+      {
+        name: "Purchase Orders",
+        href: "/stock/purchase-orders",
+        icon: FileText,
+      },
       { name: "Transfers", href: "/stock/transfers", icon: RefreshCw },
     ],
   },
@@ -140,7 +140,11 @@ const navItems: NavItem[] = [
     href: "/reports",
     icon: BarChart3,
     subItems: [
-      { name: "Financial Reports", href: "/reports/financial", icon: TrendingUp },
+      {
+        name: "Financial Reports",
+        href: "/reports/financial",
+        icon: TrendingUp,
+      },
       { name: "Claims Reports", href: "/reports/claims", icon: FileText },
       { name: "Clinical Reports", href: "/reports/clinical", icon: Activity },
       { name: "ERA Reports", href: "/reports/era", icon: Inbox },
@@ -151,7 +155,11 @@ const navItems: NavItem[] = [
     href: "/settings",
     icon: Settings,
     subItems: [
-      { name: "Practice Settings", href: "/settings/practice", icon: Building2 },
+      {
+        name: "Practice Settings",
+        href: "/settings/practice",
+        icon: Building2,
+      },
       { name: "Billing Settings", href: "/settings/billing", icon: DollarSign },
       { name: "User Management", href: "/settings/users", icon: User },
       { name: "Integrations", href: "/settings/integrations", icon: Settings },
@@ -179,10 +187,38 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([
-    { id: 1, title: "New Claim Response", message: "Claim #CLM001 has been approved", time: "5 min ago", read: false, type: "success" },
-    { id: 2, title: "Low Stock Alert", message: "Amoxicillin 250mg is below reorder level", time: "1 hour ago", read: false, type: "warning" },
-    { id: 3, title: "ERA Received", message: "ERA file for March 2026 is ready", time: "2 hours ago", read: true, type: "info" },
-    { id: 4, title: "New Patient Registered", message: "Jane Smith registered as a new patient", time: "3 hours ago", read: true, type: "success" },
+    {
+      id: 1,
+      title: "New Claim Response",
+      message: "Claim #CLM001 has been approved",
+      time: "5 min ago",
+      read: false,
+      type: "success",
+    },
+    {
+      id: 2,
+      title: "Low Stock Alert",
+      message: "Amoxicillin 250mg is below reorder level",
+      time: "1 hour ago",
+      read: false,
+      type: "warning",
+    },
+    {
+      id: 3,
+      title: "ERA Received",
+      message: "ERA file for March 2026 is ready",
+      time: "2 hours ago",
+      read: true,
+      type: "info",
+    },
+    {
+      id: 4,
+      title: "New Patient Registered",
+      message: "Jane Smith registered as a new patient",
+      time: "3 hours ago",
+      read: true,
+      type: "success",
+    },
   ]);
   const [mounted, setMounted] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -196,13 +232,22 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+      if (
+        searchRef.current &&
+        !searchRef.current.contains(event.target as Node)
+      ) {
         setShowSearchResults(false);
       }
-      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+      if (
+        notificationRef.current &&
+        !notificationRef.current.contains(event.target as Node)
+      ) {
         setShowNotifications(false);
       }
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
         setShowUserMenu(false);
       }
     };
@@ -211,8 +256,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleSubmenu = (href: string) => {
-    setOpenSubmenus(prev =>
-      prev.includes(href) ? prev.filter(h => h !== href) : [...prev, href]
+    setOpenSubmenus((prev) =>
+      prev.includes(href) ? prev.filter((h) => h !== href) : [...prev, href],
     );
   };
 
@@ -221,9 +266,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     return pathname.startsWith(href);
   };
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const handleGlobalSearch = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleGlobalSearch = async (
+    e: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (e.key === "Enter" && globalSearch.trim()) {
       router.push(`/search?q=${encodeURIComponent(globalSearch)}`);
       setShowSearchResults(false);
@@ -235,15 +282,21 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     if (value.trim().length > 2) {
       try {
         const [patientsRes, practicesRes, doctorsRes] = await Promise.all([
-          fetch(`/api/patients/search?q=${encodeURIComponent(value)}`).catch(() => ({ ok: false, json: () => [] })),
-          fetch(`/api/practices/search?q=${encodeURIComponent(value)}`).catch(() => ({ ok: false, json: () => [] })),
-          fetch(`/api/doctors/search?q=${encodeURIComponent(value)}`).catch(() => ({ ok: false, json: () => [] })),
+          fetch(`/api/patients/search?q=${encodeURIComponent(value)}`).catch(
+            () => ({ ok: false, json: () => [] }),
+          ),
+          fetch(`/api/practices/search?q=${encodeURIComponent(value)}`).catch(
+            () => ({ ok: false, json: () => [] }),
+          ),
+          fetch(`/api/doctors/search?q=${encodeURIComponent(value)}`).catch(
+            () => ({ ok: false, json: () => [] }),
+          ),
         ]);
-        
+
         const patients = patientsRes.ok ? await patientsRes.json() : [];
         const practices = practicesRes.ok ? await practicesRes.json() : [];
         const doctors = doctorsRes.ok ? await doctorsRes.json() : [];
-        
+
         setSearchResults([...patients, ...practices, ...doctors]);
         setShowSearchResults(true);
       } catch (error) {
@@ -256,15 +309,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   };
 
   const markNotificationAsRead = (id: number) => {
-    setNotifications(prev =>
-      prev.map(n => n.id === id ? { ...n, read: true } : n)
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
     );
   };
 
   const markAllAsRead = () => {
-    setNotifications(prev =>
-      prev.map(n => ({ ...n, read: true }))
-    );
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
   const getNotificationIcon = (type?: string) => {
@@ -301,7 +352,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         }`}
       >
         {/* Logo */}
-        <div className={`p-4 border-b flex items-center ${sidebarCollapsed ? "justify-center" : "justify-between"}`}>
+        <div
+          className={`p-4 border-b flex items-center ${sidebarCollapsed ? "justify-center" : "justify-between"}`}
+        >
           {!sidebarCollapsed && (
             <Link href="/" className="flex flex-col">
               <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
@@ -311,7 +364,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </Link>
           )}
           {sidebarCollapsed && (
-            <Link href="/" className="w-10 h-10 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center">
+            <Link
+              href="/"
+              className="w-10 h-10 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center"
+            >
               <span className="text-white font-bold text-lg">P</span>
             </Link>
           )}
@@ -319,7 +375,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="p-1 rounded-lg hover:bg-gray-100 text-gray-500 transition"
           >
-            {sidebarCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+            {sidebarCollapsed ? (
+              <ChevronRight className="h-5 w-5" />
+            ) : (
+              <ChevronLeft className="h-5 w-5" />
+            )}
           </button>
         </div>
 
@@ -340,7 +400,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     >
                       <div className="flex items-center gap-3">
                         <item.icon className="h-5 w-5" />
-                        {!sidebarCollapsed && <span className="text-sm font-medium">{item.name}</span>}
+                        {!sidebarCollapsed && (
+                          <span className="text-sm font-medium">
+                            {item.name}
+                          </span>
+                        )}
                       </div>
                       {!sidebarCollapsed && (
                         <ChevronDown
@@ -362,7 +426,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                   : "text-gray-600 hover:bg-gray-100"
                               }`}
                             >
-                              {subItem.icon && <subItem.icon className="h-4 w-4" />}
+                              {subItem.icon && (
+                                <subItem.icon className="h-4 w-4" />
+                              )}
                               <span>{subItem.name}</span>
                             </Link>
                           </li>
@@ -380,7 +446,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     }`}
                   >
                     <item.icon className="h-5 w-5" />
-                    {!sidebarCollapsed && <span className="text-sm font-medium">{item.name}</span>}
+                    {!sidebarCollapsed && (
+                      <span className="text-sm font-medium">{item.name}</span>
+                    )}
                   </Link>
                 )}
               </li>
@@ -400,25 +468,37 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </div>
               {!sidebarCollapsed && (
                 <div className="flex-1 text-left">
-                  <p className="text-sm font-medium text-gray-900">Dr. John Smith</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    Dr. John Smith
+                  </p>
                   <p className="text-xs text-gray-500">Administrator</p>
                 </div>
               )}
-              {!sidebarCollapsed && <ChevronDown className="h-4 w-4 text-gray-400" />}
+              {!sidebarCollapsed && (
+                <ChevronDown className="h-4 w-4 text-gray-400" />
+              )}
             </button>
-            
+
             {showUserMenu && (
               <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-lg shadow-lg border z-50">
                 <div className="p-3 border-b">
                   <p className="font-medium text-gray-900">Dr. John Smith</p>
-                  <p className="text-xs text-gray-500">john.smith@example.com</p>
+                  <p className="text-xs text-gray-500">
+                    john.smith@example.com
+                  </p>
                 </div>
                 <div className="py-2">
-                  <Link href="/profile" className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                  <Link
+                    href="/profile"
+                    className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
                     <User className="h-4 w-4" />
                     Profile
                   </Link>
-                  <Link href="/settings" className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                  <Link
+                    href="/settings"
+                    className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
                     <Settings className="h-4 w-4" />
                     Settings
                   </Link>
@@ -445,7 +525,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <button className="p-2 rounded-lg hover:bg-gray-100 lg:hidden">
               <Menu className="h-5 w-5 text-gray-600" />
             </button>
-            
+
             {/* Global Search */}
             <div className="relative flex-1 max-w-md" ref={searchRef}>
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -457,7 +537,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 onKeyDown={handleGlobalSearch}
                 className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
               />
-              
+
               {/* Search Results Dropdown */}
               {showSearchResults && searchResults.length > 0 && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg shadow-lg border z-50 max-h-96 overflow-y-auto">
@@ -468,12 +548,22 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                       className="flex items-center gap-3 px-4 py-2 hover:bg-gray-50 border-b last:border-0"
                       onClick={() => setShowSearchResults(false)}
                     >
-                      {result.type === "patient" && <Users className="h-4 w-4 text-blue-500" />}
-                      {result.type === "doctor" && <Stethoscope className="h-4 w-4 text-teal-500" />}
-                      {result.type === "practice" && <Building2 className="h-4 w-4 text-purple-500" />}
+                      {result.type === "patient" && (
+                        <Users className="h-4 w-4 text-blue-500" />
+                      )}
+                      {result.type === "doctor" && (
+                        <Stethoscope className="h-4 w-4 text-teal-500" />
+                      )}
+                      {result.type === "practice" && (
+                        <Building2 className="h-4 w-4 text-purple-500" />
+                      )}
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{result.name}</p>
-                        <p className="text-xs text-gray-500">{result.details}</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {result.name}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {result.details}
+                        </p>
                       </div>
                     </Link>
                   ))}
@@ -481,7 +571,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               )}
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             {/* Notifications */}
             <div className="relative" ref={notificationRef}>
@@ -494,11 +584,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
                 )}
               </button>
-              
+
               {showNotifications && (
                 <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border z-50">
                   <div className="p-3 border-b flex justify-between items-center">
-                    <h3 className="font-semibold text-gray-900">Notifications</h3>
+                    <h3 className="font-semibold text-gray-900">
+                      Notifications
+                    </h3>
                     {unreadCount > 0 && (
                       <button
                         onClick={markAllAsRead}
@@ -524,11 +616,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                           <div className="flex items-start gap-2">
                             {getNotificationIcon(n.type)}
                             <div className="flex-1">
-                              <p className="text-sm font-medium text-gray-900">{n.title}</p>
-                              <p className="text-xs text-gray-500 mt-0.5">{n.message}</p>
-                              <p className="text-xs text-gray-400 mt-1">{n.time}</p>
+                              <p className="text-sm font-medium text-gray-900">
+                                {n.title}
+                              </p>
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                {n.message}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-1">
+                                {n.time}
+                              </p>
                             </div>
-                            {!n.read && <div className="w-2 h-2 bg-blue-500 rounded-full mt-2"></div>}
+                            {!n.read && (
+                              <div className="w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
+                            )}
                           </div>
                         </div>
                       ))
@@ -537,11 +637,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </div>
               )}
             </div>
-            
+
             <button className="p-2 rounded-lg hover:bg-gray-100">
               <HelpCircle className="h-5 w-5 text-gray-600" />
             </button>
-            
+
             <button
               onClick={() => router.push("/login")}
               className="p-2 rounded-lg hover:bg-gray-100"
@@ -552,9 +652,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-6">
-          {children}
-        </main>
+        <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>
   );

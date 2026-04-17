@@ -5,7 +5,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, X, Filter, Building2, MapPin, Phone, Mail } from "lucide-react";
+import {
+  Search,
+  X,
+  Filter,
+  Building2,
+  MapPin,
+  Phone,
+  Mail,
+} from "lucide-react";
 
 interface Practice {
   id: string;
@@ -44,7 +52,7 @@ export default function PracticesListPage() {
     try {
       const response = await fetch("/api/practices");
       const result = await response.json();
-      
+
       if (result.success) {
         setPractices(result.data);
         setFilteredPractices(result.data);
@@ -69,15 +77,19 @@ export default function PracticesListPage() {
           practice.practiceName.toLowerCase().includes(term) ||
           practice.bhfNumber.toLowerCase().includes(term) ||
           practice.practiceDisplayId.toLowerCase().includes(term) ||
-          practice.locations.some(loc => loc.city.toLowerCase().includes(term)) ||
+          practice.locations.some((loc) =>
+            loc.city.toLowerCase().includes(term),
+          ) ||
           (practice.email && practice.email.toLowerCase().includes(term)) ||
-          (practice.phone && practice.phone.includes(term))
+          (practice.phone && practice.phone.includes(term)),
       );
     }
 
     // Filter by practice type
     if (filterType !== "all") {
-      filtered = filtered.filter((practice) => practice.practiceType === filterType);
+      filtered = filtered.filter(
+        (practice) => practice.practiceType === filterType,
+      );
     }
 
     setFilteredPractices(filtered);
@@ -90,7 +102,7 @@ export default function PracticesListPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, isActive: !currentStatus }),
       });
-      
+
       if (response.ok) {
         fetchPractices();
       }
@@ -100,15 +112,19 @@ export default function PracticesListPage() {
   };
 
   const deletePractice = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this practice? This will also delete all associated data (locations, contracts, bank details, documents).")) {
+    if (
+      !confirm(
+        "Are you sure you want to delete this practice? This will also delete all associated data (locations, contracts, bank details, documents).",
+      )
+    ) {
       return;
     }
-    
+
     try {
       const response = await fetch(`/api/practices?id=${id}`, {
         method: "DELETE",
       });
-      
+
       if (response.ok) {
         fetchPractices();
       } else {
@@ -139,7 +155,9 @@ export default function PracticesListPage() {
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Practices</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage your medical practices and billing entities</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage your medical practices and billing entities
+          </p>
         </div>
         <Link
           href="/practices/new"
@@ -191,7 +209,7 @@ export default function PracticesListPage() {
               <option value="ROOMS">Rooms Only</option>
               <option value="HOSPITAL">Hospital Only</option>
             </select>
-            
+
             {(searchTerm || filterType !== "all") && (
               <button
                 onClick={clearSearch}
@@ -206,7 +224,8 @@ export default function PracticesListPage() {
         {/* Search Results Count */}
         {searchTerm && (
           <div className="mt-3 text-sm text-gray-500">
-            Found {filteredPractices.length} practice{filteredPractices.length !== 1 ? "s" : ""} matching "{searchTerm}"
+            Found {filteredPractices.length} practice
+            {filteredPractices.length !== 1 ? "s" : ""} matching "{searchTerm}"
           </div>
         )}
       </div>
@@ -215,7 +234,9 @@ export default function PracticesListPage() {
         <div className="text-center py-12 bg-gray-50 rounded-lg">
           <Building2 className="h-12 w-12 mx-auto text-gray-300 mb-3" />
           <p className="text-gray-500">
-            {searchTerm ? `No practices found matching "${searchTerm}"` : "No practices found. Create your first practice."}
+            {searchTerm
+              ? `No practices found matching "${searchTerm}"`
+              : "No practices found. Create your first practice."}
           </p>
           {searchTerm && (
             <button
@@ -272,7 +293,10 @@ export default function PracticesListPage() {
                     {practice.practiceDisplayId}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    <Link href={`/practices/${practice.id}`} className="hover:text-blue-600">
+                    <Link
+                      href={`/practices/${practice.id}`}
+                      className="hover:text-blue-600"
+                    >
                       {practice.practiceName}
                     </Link>
                   </td>
@@ -280,26 +304,45 @@ export default function PracticesListPage() {
                     {practice.bhfNumber}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      practice.practiceType === "BOTH" ? "bg-purple-100 text-purple-800" :
-                      practice.practiceType === "ROOMS" ? "bg-green-100 text-green-800" :
-                      "bg-orange-100 text-orange-800"
-                    }`}>
-                      {practice.practiceType === "BOTH" ? "Rooms & Hospital" :
-                       practice.practiceType === "ROOMS" ? "Rooms Only" : "Hospital Only"}
+                    <span
+                      className={`px-2 py-1 text-xs rounded-full ${
+                        practice.practiceType === "CASH_AND_MEDICAL_AID" ||
+                        practice.practiceType === "BOTH"
+                          ? "bg-purple-100 text-purple-800"
+                          : practice.practiceType === "CASH_ONLY" ||
+                              practice.practiceType === "ROOMS"
+                            ? "bg-green-100 text-green-800"
+                            : practice.practiceType === "MEDICAL_AID_ONLY" ||
+                                practice.practiceType === "HOSPITAL"
+                              ? "bg-blue-100 text-blue-800"
+                              : "bg-gray-100 text-gray-800"
+                      }`}
+                    >
+                      {practice.practiceType === "CASH_AND_MEDICAL_AID" ||
+                      practice.practiceType === "BOTH"
+                        ? "Cash & Medical Aid"
+                        : practice.practiceType === "CASH_ONLY" ||
+                            practice.practiceType === "ROOMS"
+                          ? "Cash Only"
+                          : practice.practiceType === "MEDICAL_AID_ONLY" ||
+                              practice.practiceType === "HOSPITAL"
+                            ? "Medical Aid Only"
+                            : practice.practiceType}
                     </span>
-                   </td>
+                  </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     <div className="flex items-center gap-1">
                       <MapPin className="h-3 w-3" />
-                      {practice.locations.find(l => l.isMain)?.city || practice.locations[0]?.city || "-"}
+                      {practice.locations.find((l) => l.isMain)?.city ||
+                        practice.locations[0]?.city ||
+                        "-"}
                     </div>
-                    {practice.locations.find(l => l.isMain)?.suburb && (
+                    {practice.locations.find((l) => l.isMain)?.suburb && (
                       <div className="text-xs text-gray-400 mt-0.5">
-                        {practice.locations.find(l => l.isMain)?.suburb}
+                        {practice.locations.find((l) => l.isMain)?.suburb}
                       </div>
                     )}
-                   </td>
+                  </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {practice.phone && (
                       <div className="flex items-center gap-1 text-xs">
@@ -311,10 +354,12 @@ export default function PracticesListPage() {
                         <Mail className="h-3 w-3" /> {practice.email}
                       </div>
                     )}
-                   </td>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <button
-                      onClick={() => togglePracticeStatus(practice.id, practice.isActive)}
+                      onClick={() =>
+                        togglePracticeStatus(practice.id, practice.isActive)
+                      }
                       className={`px-2 py-1 text-xs font-semibold rounded-full ${
                         practice.isActive
                           ? "bg-green-100 text-green-800 hover:bg-green-200"
@@ -323,7 +368,7 @@ export default function PracticesListPage() {
                     >
                       {practice.isActive ? "Active" : "Inactive"}
                     </button>
-                   </td>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <Link
                       href={`/practices/${practice.id}`}
@@ -343,8 +388,8 @@ export default function PracticesListPage() {
                     >
                       Delete
                     </button>
-                   </td>
-                 </tr>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
